@@ -1,2 +1,2 @@
-markdown_dir=./literature_notes/
-pdf_dir=./papers/
+markdown_dir=./literature_notes
+pdf_dir=./papers

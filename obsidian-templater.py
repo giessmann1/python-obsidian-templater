@@ -20,12 +20,12 @@ TEMPLATE_DIR = "templates"
 # Maps BibTeX fields to their corresponding metadata fields
 type_fields = {
     "conference": {
-        "booktitle": "collection-title",
+        "booktitle": "container-title",
         "month": "issued.date-parts",
         "volume": "volume",
         "number": "issue",
         "pages": "page",
-        "series": "container-title",
+        "series": "collection-title",
         "editor": "editor",
         "publisher": "publisher",
         "address": "publisher-location",
@@ -78,7 +78,7 @@ def get_metadata_from_doi(doi):
         # Determine publication type based on metadata
         pub_type = "Misc"  # default type
         
-        if metadata.get("type") == "paper-conference" or \
+        if metadata.get("type") == "proceedings-article" or \
            "conference" in metadata.get("container-title", "").lower() or \
            "proceedings" in metadata.get("container-title", "").lower():
             pub_type = "conference"
@@ -176,11 +176,24 @@ def create_bibtex_string(metadata, alias):
         if cleaned_name:
             valid_authors.append(author)
     
+    # For books, use editors as authors if no authors are present
+    if metadata.get("type") == "Book" and not valid_authors:
+        editors = metadata.get("editor", [])
+        valid_editors = []
+        for editor in editors:
+            cleaned_name = clean_author_name(editor)
+            if cleaned_name:
+                valid_editors.append(editor)
+        if valid_editors:
+            valid_authors = valid_editors
+            # Clear the editors list since we're using them as authors
+            editors = []
+    
     author_entries = " and ".join(
-        f"{a.get('family', '')}, {a.get('given', '')}" for a in valid_authors
+        f"{clean_lastname_for_alias(a.get('family', ''))}, {a.get('given', '').strip()}" for a in valid_authors
     )
     
-    # Format editor list with cleaned names
+    # Format editor list with cleaned names (only if we haven't used them as authors)
     editors = metadata.get("editor", [])
     valid_editors = []
     for editor in editors:
@@ -189,7 +202,7 @@ def create_bibtex_string(metadata, alias):
             valid_editors.append(editor)
     
     editor_entries = " and ".join(
-        f"{e.get('family', '')}, {e.get('given', '')}" for e in valid_editors
+        f"{clean_lastname_for_alias(e.get('family', ''))}, {e.get('given', '').strip()}" for e in valid_editors
     )
     
     # Extract year and month
@@ -336,7 +349,7 @@ def find_journal_metrics(journal_name, sjr_data):
     for idx, row in sjr_data.iterrows():
         normalized_title = normalize_journal_name(row['Title'])
         ratio = SequenceMatcher(None, normalized_search, normalized_title).ratio()
-        if ratio > 0.8 and ratio > best_ratio:  # 0.8 is the similarity threshold
+        if ratio > 0.9 and ratio > best_ratio:
             best_ratio = ratio
             best_match = row
     
@@ -376,6 +389,21 @@ def clean_author_name(author):
             return name
     return None
 
+def clean_lastname_for_alias(lastname):
+    """
+    Clean lastname for use in alias and filenames.
+    
+    Args:
+        lastname (str): Lastname to clean
+        
+    Returns:
+        str: Cleaned lastname with underscores
+    """
+    if not lastname:
+        return "Unknown"
+    # Trim whitespace and replace internal spaces with underscores
+    return lastname.strip().replace(' ', '_')
+
 def get_first_valid_author(authors):
     """
     Get the first valid author from the list.
@@ -393,14 +421,14 @@ def get_first_valid_author(authors):
         if isinstance(author, dict):
             family = author.get('family', '').strip()
             if family:
-                return family
+                return clean_lastname_for_alias(family)
         elif isinstance(author, str):
             name = author.strip()
             if name:
                 # Try to extract family name (last word)
                 parts = name.split()
                 if parts:
-                    return parts[-1]
+                    return clean_lastname_for_alias(parts[-1])
     return "Unknown"
 
 def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
@@ -439,6 +467,17 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         if cleaned_name:
             valid_authors.append(author)
     
+    # For books, use editors as authors if no authors are present
+    if metadata.get("type") == "Book" and not valid_authors:
+        editors = metadata.get("editor", [])
+        valid_editors = []
+        for editor in editors:
+            cleaned_name = clean_author_name(editor)
+            if cleaned_name:
+                valid_editors.append(editor)
+        if valid_editors:
+            valid_authors = valid_editors
+    
     # Get first valid author for alias
     first_author = get_first_valid_author(valid_authors)
     alias = f"{first_author}{year}"
@@ -449,7 +488,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     author_list = "".join(f"  - \"{clean_author_name(a)}\"\n" for a in valid_authors)
     author_list = f"\n{author_list}" if author_list else "No authors found"
     
-    # Clean and filter editors
+    # Clean and filter editors (only if we haven't used them as authors)
     editors = metadata.get("editor", [])
     valid_editors = []
     for editor in editors:
@@ -458,7 +497,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
             valid_editors.append(editor)
     
     editor_list = "".join(f"  - \"{clean_author_name(e)}\"\n" for e in valid_editors)
-    editor_list = f"\n{editor_list}" if editor_list else "No editors found"
+    editor_list = f"\n{editor_list}" if editor_list else ""
 
     # Common placeholders for all types
     placeholders = {
@@ -492,7 +531,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         if journal_metrics:
             # Format areas as a markdown list with quotes around each area
             areas_list = journal_metrics['Areas']
-            areas_markdown = "\n".join([f"- \"{area}\"" for area in areas_list]) if areas_list else "No areas found"
+            areas_markdown = "\n".join([f"  - \"{area}\"" for area in areas_list]) if areas_list else "No areas found"
             areas_markdown = f"\n{areas_markdown}" if areas_list else areas_markdown
             
             # Convert numeric values to string and replace comma with dot
@@ -520,12 +559,12 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     # Add type-specific placeholders
     if metadata.get("type") == "Conference Proceedings":
         placeholders.update({
-            "booktitle": get_metadata_value("collection-title"),
+            "booktitle": get_metadata_value("container-title"),
             "month": month or "",
             "volume": get_metadata_value("volume"),
             "number": get_metadata_value("issue"),
             "pages": get_metadata_value("page").replace("--", "-"),
-            "series": get_metadata_value("container-title"),
+            "series": get_metadata_value("collection-title"),
             "editor_list": editor_list.rstrip(),
             "publisher": get_metadata_value("publisher"),
             "address": get_metadata_value("publisher-location"),
@@ -623,11 +662,16 @@ def rename_and_copy_pdf(pdf_path, alias, pdf_output_dir, title):
     # Create PDF output directory if it doesn't exist
     os.makedirs(pdf_output_dir, exist_ok=True)
 
+    # Extract year from alias (last 4 characters)
+    year = alias[-4:]
+    # Clean the alias (in case it wasn't cleaned before)
+    cleaned_alias = clean_lastname_for_alias(alias[:-4]) + year
+
     # Copy PDF to output directory
-    new_pdf_path = os.path.join(pdf_output_dir, f"{alias}_{clean_title_for_filename(title)}.pdf")
+    new_pdf_path = os.path.join(pdf_output_dir, f"{cleaned_alias}_{clean_title_for_filename(title)}.pdf")
     shutil.copy(pdf_path, new_pdf_path)
     
-    return f"{alias}_{clean_title_for_filename(title)}.pdf"
+    return f"{cleaned_alias}_{clean_title_for_filename(title)}.pdf"
 
 def check_required_fields(metadata, pub_type):
     """
@@ -647,7 +691,7 @@ def check_required_fields(metadata, pub_type):
                 missing_fields.append(field)
         
         if missing_fields:
-            print(f"Warning: Missing fields for: {', '.join(missing_fields)}")
+            print(f"\033[91mWarning: Missing fields for: {', '.join(missing_fields)}\033[0m")
         return missing_fields
     return []
 
@@ -693,13 +737,24 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     # Extract year from metadata
     year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
 
-    # Clean and filter authors for alias generation
+    # Clean and filter authors
     authors = metadata.get("author", [])
     valid_authors = []
     for author in authors:
         cleaned_name = clean_author_name(author)
         if cleaned_name:
             valid_authors.append(author)
+    
+    # For books, use editors as authors if no authors are present
+    if metadata.get("type") == "Book" and not valid_authors:
+        editors = metadata.get("editor", [])
+        valid_editors = []
+        for editor in editors:
+            cleaned_name = clean_author_name(editor)
+            if cleaned_name:
+                valid_editors.append(editor)
+        if valid_editors:
+            valid_authors = valid_editors
     
     # Get first valid author for alias
     first_author = get_first_valid_author(valid_authors)

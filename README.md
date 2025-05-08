@@ -28,8 +28,8 @@ Just a small vibe coding project that automatically generates Obsidian literatur
 
 1. Update the `directories.txt` with the following format:
 ```txt
-markdown_dir=/path/to/your/obsidian/notes/
-pdf_dir=/path/to/your/papers/
+markdown_dir=/path/to/your/obsidian/notes
+pdf_dir=/path/to/your/papers
 ```
 
 2. Update the `templates` directory if needed:

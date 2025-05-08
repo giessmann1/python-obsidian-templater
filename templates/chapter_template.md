@@ -3,8 +3,7 @@ aliases:
   - "{{alias}}"
 imported: {{imported_date}}
 status: "{{status}}"
-author:
-{{author_list}}
+author: {{author_list}}
 title: "{{title}}"
 booktitle: "{{booktitle}}"
 edition: "{{edition}}"
@@ -15,8 +14,7 @@ pages: "{{pages}}"
 publisher: "{{publisher}}"
 address: "{{address}}"
 series: "{{series}}"
-editor:
-{{editor_list}}
+editor: {{editor_list}}
 doi: "[{{doi}}](https://doi.org/{{doi}})"
 type: "Book Chapter"
 topic:

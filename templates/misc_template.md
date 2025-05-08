@@ -3,8 +3,7 @@ aliases:
   - "{{alias}}"
 imported: {{imported_date}}
 status: "{{status}}"
-author:
-{{author_list}}
+author: {{author_list}}
 title: "{{title}}"
 howpublished: ""
 year: {{year}}
