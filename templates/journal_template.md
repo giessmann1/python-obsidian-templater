@@ -3,8 +3,7 @@ aliases:
   - "{{alias}}"
 imported: {{imported_date}}
 status: "{{status}}"
-author:
-{{author_list}}
+author: {{author_list}}
 title: "{{title}}"
 journal: "{{journal}}"
 year: {{year}}
@@ -14,6 +13,12 @@ pages: "{{pages}}"
 issn: "{{issn}}"
 doi: "[{{doi}}](https://doi.org/{{doi}})"
 type: "Journal Article"
+sjr_quartile: "{{sjr_quartile}}"
+h_index: {{h_index}}
+citations_per_doc: {{citations_per_doc}}
+sjr_publisher: "{{sjr_publisher}}"
+sjr_areas: {{sjr_areas}}
+sjr_year: {{sjr_year}}
 topics:
 theories: 
 methods: 

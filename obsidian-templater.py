@@ -12,7 +12,9 @@ import argparse
 import html
 from datetime import datetime
 from habanero import cn
-
+import pandas as pd
+from difflib import SequenceMatcher
+import csv
 TEMPLATE_DIR = "templates"
 
 # Maps BibTeX fields to their corresponding metadata fields
@@ -166,16 +168,28 @@ def create_bibtex_string(metadata, alias):
     Returns:
         str: Formatted BibTeX entry
     """
-    # Format author list
+    # Format author list with cleaned names
     authors = metadata.get("author", [])
+    valid_authors = []
+    for author in authors:
+        cleaned_name = clean_author_name(author)
+        if cleaned_name:
+            valid_authors.append(author)
+    
     author_entries = " and ".join(
-        f"{a.get('family', '')}, {a.get('given', '')}" for a in authors
+        f"{a.get('family', '')}, {a.get('given', '')}" for a in valid_authors
     )
     
-    # Format editor list
+    # Format editor list with cleaned names
     editors = metadata.get("editor", [])
+    valid_editors = []
+    for editor in editors:
+        cleaned_name = clean_author_name(editor)
+        if cleaned_name:
+            valid_editors.append(editor)
+    
     editor_entries = " and ".join(
-        f"{e.get('family', '')}, {e.get('given', '')}" for e in editors
+        f"{e.get('family', '')}, {e.get('given', '')}" for e in valid_editors
     )
     
     # Extract year and month
@@ -247,6 +261,148 @@ def create_bibtex_string(metadata, alias):
     bibtex = bibtex.rstrip(",\n") + "\n}"
     return bibtex
 
+def load_sjr_data():
+    """
+    Load SCImago Journal Rankings data from CSV.
+    
+    Returns:
+        pd.DataFrame: DataFrame containing SJR data
+    """
+    try:
+        # Try with different CSV parsing options
+        return pd.read_csv('scimagojr_2024.csv', sep=';', quoting=csv.QUOTE_ALL)
+    except Exception as e:
+        print(f"Warning: Could not load SJR data: {str(e)}")
+        return None
+
+def normalize_journal_name(name):
+    """
+    Normalize journal name for comparison.
+    
+    Args:
+        name (str): Journal name to normalize
+        
+    Returns:
+        str: Normalized journal name
+    """
+    if not name:
+        return ""
+    # Convert to lowercase
+    name = name.lower()
+    # Replace common variations
+    name = name.replace(" & ", " and ")
+    name = name.replace("&", " and ")
+    # Remove common words
+    name = name.replace("the ", "")
+    # Remove punctuation
+    name = ''.join(c for c in name if c.isalnum() or c.isspace())
+    return name.strip()
+
+def find_journal_metrics(journal_name, sjr_data):
+    """
+    Find journal metrics using fuzzy matching.
+    
+    Args:
+        journal_name (str): Name of the journal to find
+        sjr_data (pd.DataFrame): SJR data
+        
+    Returns:
+        dict: Journal metrics or None if not found
+    """
+    if sjr_data is None or not journal_name:
+        return None
+        
+    normalized_search = normalize_journal_name(journal_name)
+    
+    # Try exact match first
+    exact_match = sjr_data[sjr_data['Title'].apply(normalize_journal_name) == normalized_search]
+    if not exact_match.empty:
+        # Split areas by semicolon and create a list
+        areas = exact_match.iloc[0]['Areas']
+        areas_list = [area.strip() for area in areas.split(';')] if pd.notna(areas) else []
+        
+        return {
+            'SJR Best Quartile': exact_match.iloc[0]['SJR Best Quartile'],
+            'H index': exact_match.iloc[0]['H index'],
+            'Citations / Doc. (2years)': exact_match.iloc[0]['Citations / Doc. (2years)'],
+            'Publisher': exact_match.iloc[0]['Publisher'],
+            'Areas': areas_list
+        }
+    
+    # Try fuzzy matching if no exact match
+    best_ratio = 0
+    best_match = None
+    
+    for idx, row in sjr_data.iterrows():
+        normalized_title = normalize_journal_name(row['Title'])
+        ratio = SequenceMatcher(None, normalized_search, normalized_title).ratio()
+        if ratio > 0.8 and ratio > best_ratio:  # 0.8 is the similarity threshold
+            best_ratio = ratio
+            best_match = row
+    
+    if best_match is not None:
+        # Split areas by semicolon and create a list
+        areas = best_match['Areas']
+        areas_list = [area.strip() for area in areas.split(';')] if pd.notna(areas) else []
+        
+        return {
+            'SJR Best Quartile': best_match['SJR Best Quartile'],
+            'H index': best_match['H index'],
+            'Citations / Doc. (2years)': best_match['Citations / Doc. (2years)'],
+            'Publisher': best_match['Publisher'],
+            'Areas': areas_list
+        }
+    
+    return None
+
+def clean_author_name(author):
+    """
+    Clean and validate an author name.
+    
+    Args:
+        author (dict or str): Author information
+        
+    Returns:
+        str: Cleaned name or None if invalid
+    """
+    if isinstance(author, dict):
+        given = author.get('given', '').strip()
+        family = author.get('family', '').strip()
+        if given or family:  # If either given or family name exists
+            return f"{given} {family}".strip()
+    elif isinstance(author, str):
+        name = author.strip()
+        if name:  # If string is not empty or just whitespace
+            return name
+    return None
+
+def get_first_valid_author(authors):
+    """
+    Get the first valid author from the list.
+    
+    Args:
+        authors (list): List of author dictionaries or strings
+        
+    Returns:
+        str: First valid author's family name or "Unknown"
+    """
+    if not authors:
+        return "Unknown"
+    
+    for author in authors:
+        if isinstance(author, dict):
+            family = author.get('family', '').strip()
+            if family:
+                return family
+        elif isinstance(author, str):
+            name = author.strip()
+            if name:
+                # Try to extract family name (last word)
+                parts = name.split()
+                if parts:
+                    return parts[-1]
+    return "Unknown"
+
 def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     """
     Fill template with metadata and return formatted content.
@@ -274,15 +430,35 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     # Extract basic metadata
     year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
     month = metadata.get("issued", {}).get("date-parts", [[None]])[0][1] if len(metadata.get("issued", {}).get("date-parts", [[None]])[0]) > 1 else None
+    
+    # Clean and filter authors
     authors = metadata.get("author", [])
-    first_author = authors[0].get("family", "Unknown") if authors else "Unknown"
+    valid_authors = []
+    for author in authors:
+        cleaned_name = clean_author_name(author)
+        if cleaned_name:
+            valid_authors.append(author)
+    
+    # Get first valid author for alias
+    first_author = get_first_valid_author(valid_authors)
     alias = f"{first_author}{year}"
     imported_date = datetime.today().strftime("%Y-%m-%d")
     status = "Imported" if pdf_filename else "NoPDF"
 
-    # Format author and editor lists
-    author_list = "".join(f"  - \"{a.get('given', '')} {a.get('family', '')}\"\n" for a in authors)
-    editor_list = "".join(f"  - \"{e.get('given', '')} {e.get('family', '')}\"\n" for e in metadata.get("editor", []))
+    # Format author and editor lists with newline only if there are items
+    author_list = "".join(f"  - \"{clean_author_name(a)}\"\n" for a in valid_authors)
+    author_list = f"\n{author_list}" if author_list else "No authors found"
+    
+    # Clean and filter editors
+    editors = metadata.get("editor", [])
+    valid_editors = []
+    for editor in editors:
+        cleaned_name = clean_author_name(editor)
+        if cleaned_name:
+            valid_editors.append(editor)
+    
+    editor_list = "".join(f"  - \"{clean_author_name(e)}\"\n" for e in valid_editors)
+    editor_list = f"\n{editor_list}" if editor_list else "No editors found"
 
     # Common placeholders for all types
     placeholders = {
@@ -297,6 +473,50 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         "bibtex": create_bibtex_string(metadata, alias)
     }
 
+    # Add journal metrics if this is a journal article
+    if metadata.get("type") == "Journal Article":
+        # Load SJR data
+        sjr_data = load_sjr_data()
+        journal_name = get_metadata_value("container-title")
+        journal_metrics = find_journal_metrics(journal_name, sjr_data)
+        
+        # Add journal-specific placeholders
+        placeholders.update({
+            "journal": journal_name,
+            "volume": get_metadata_value("volume"),
+            "number": get_metadata_value("issue"),
+            "pages": get_metadata_value("page"),
+            "issn": metadata.get("ISSN", [""])[0] if isinstance(metadata.get("ISSN"), list) else metadata.get("ISSN", "")
+        })
+        
+        if journal_metrics:
+            # Format areas as a markdown list with quotes around each area
+            areas_list = journal_metrics['Areas']
+            areas_markdown = "\n".join([f"- \"{area}\"" for area in areas_list]) if areas_list else "No areas found"
+            areas_markdown = f"\n{areas_markdown}" if areas_list else areas_markdown
+            
+            # Convert numeric values to string and replace comma with dot
+            h_index = str(journal_metrics['H index']).replace(',', '.')
+            citations_per_doc = str(journal_metrics['Citations / Doc. (2years)']).replace(',', '.')
+            
+            placeholders.update({
+                "sjr_quartile": journal_metrics['SJR Best Quartile'],
+                "h_index": h_index,
+                "citations_per_doc": citations_per_doc,
+                "sjr_publisher": journal_metrics['Publisher'],
+                "sjr_areas": areas_markdown,
+                "sjr_year": "2024"  # Add hardcoded SJR year
+            })
+        else:
+            placeholders.update({
+                "sjr_quartile": "Not found in SJR",
+                "h_index": "Not found in SJR",
+                "citations_per_doc": "Not found in SJR",
+                "sjr_publisher": "Not found in SJR",
+                "sjr_areas": "Not found in SJR",
+                "sjr_year": "Not found in SJR"
+            })
+
     # Add type-specific placeholders
     if metadata.get("type") == "Conference Proceedings":
         placeholders.update({
@@ -310,14 +530,6 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
             "publisher": get_metadata_value("publisher"),
             "address": get_metadata_value("publisher-location"),
             "organization": get_metadata_value("event.name")
-        })
-    elif metadata.get("type") == "Journal Article":
-        placeholders.update({
-            "journal": get_metadata_value("container-title"),
-            "volume": get_metadata_value("volume"),
-            "number": get_metadata_value("issue"),
-            "pages": get_metadata_value("page").replace("--", "-"),
-            "issn": metadata.get("ISSN", [""])[0] or ""  # Take first ISSN if multiple exist
         })
     elif metadata.get("type") == "Book":
         placeholders.update({
@@ -337,7 +549,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
             "address": get_metadata_value("publisher-location"),
             "pages": get_metadata_value("page").replace("--", "-"),
             "editor_list": editor_list.rstrip(),
-            "isbn": metadata.get("ISBN", [""])[0] or "",  # Take first ISBN if multiple exist
+            "isbn": metadata.get("ISBN", [""])[0] or "",  # Take first ISBN if mu exist
             "series": get_metadata_value("collection-title"),
             "edition": get_metadata_value("edition"),
             "chapter": get_metadata_value("chapter")
@@ -442,15 +654,6 @@ def check_required_fields(metadata, pub_type):
 def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_type=None, skip_pdf=False, local_pdf=None):
     """
     Process a DOI: fetch metadata, download PDF, create note.
-    
-    Args:
-        doi (str): DOI to process
-        template_dir (str): Directory containing templates
-        markdown_output_dir (str): Directory for markdown output
-        pdf_output_dir (str): Directory for PDF output
-        force_type (str, optional): Force publication type
-        skip_pdf (bool, optional): Skip PDF download
-        local_pdf (str, optional): Path to local PDF file
     """
     # Fetch metadata
     metadata, pub_type = get_metadata_from_doi(doi)
@@ -487,10 +690,19 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     }
     template_path = os.path.join(template_dir, template_mapping.get(pub_type, "misc_template.md"))
 
-    # Compute alias and title
+    # Extract year from metadata
     year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
+
+    # Clean and filter authors for alias generation
     authors = metadata.get("author", [])
-    first_author = authors[0].get("family", "Unknown") if authors else "Unknown"
+    valid_authors = []
+    for author in authors:
+        cleaned_name = clean_author_name(author)
+        if cleaned_name:
+            valid_authors.append(author)
+    
+    # Get first valid author for alias
+    first_author = get_first_valid_author(valid_authors)
     alias = f"{first_author}{year}"
     title = metadata.get("title", "")
 
