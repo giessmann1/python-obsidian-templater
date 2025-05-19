@@ -26,7 +26,7 @@ Just a small vibe coding project that automatically generates Obsidian literatur
 
 ## Setup
 
-1. Update the `directories.txt` with the following format:
+1. Create `directories.txt` with the following format:
 ```txt
 markdown_dir=/path/to/your/obsidian/notes
 pdf_dir=/path/to/your/papers
@@ -56,31 +56,51 @@ pdf_dir=/path/to/your/papers
 
 1. Basic usage with a DOI:
 ```bash
-python obsidian-templater.py -doi 10.1038/s41586-020-2649-2
+python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10
 ```
 
 2. Skip PDF download:
 ```bash
-python obsidian-templater.py -doi 10.1038/s41586-020-2649-2 --skip-pdf
+python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 --skip-pdf
 ```
 
 3. Use a local PDF file:
 ```bash
-python obsidian-templater.py -doi 10.1038/s41586-020-2649-2 --local-pdf "/path/to/paper.pdf"
+python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 --local-pdf "/path/to/paper.pdf"
 ```
 
 4. Force publication type:
 ```bash
-python obsidian-templater.py -doi 10.1038/s41586-020-2649-2 --force-type conference
+python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 --force-type conference
 ```
 Hint: If the metadata type is incorrect, simply run the command again with the correct type and the note and PDF will be overwritten.
 
 5. Override output directories:
 ```bash
-python obsidian-templater.py -doi 10.1038/s41586-020-2649-2 \
+python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 \
     --markdown-dir "/path/to/notes" \
     --pdf-dir "/path/to/papers"
 ```
+
+### Batch Processing
+
+You can process multiple DOIs at once using the provided shell script. Create a text file with one DOI per line (e.g., `dois.txt`):
+
+```txt
+10.1007/978-3-031-68211-7_10
+10.1007/978-3-658-46151-5
+```
+
+Then run:
+```bash
+./process_dois.sh dois.txt
+```
+
+The script will:
+- Process each DOI sequentially
+- Skip empty lines
+- Remove any "doi" prefix and extra whitespace
+- Show progress for each DOI
 
 ## License
 This project is licensed under the MIT License.

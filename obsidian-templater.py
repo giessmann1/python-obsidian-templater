@@ -49,13 +49,13 @@ type_fields = {
         "series": "container-title"
     },
     "chapter": {
-        "booktitle": "container-title",
+        "booktitle": "collection-title",
         "publisher": "publisher",
         "address": "publisher-location",
         "pages": "page",
         "editor": "editor",
         "isbn": "ISBN",
-        "series": "collection-title",
+        "series": "container-title",
         "edition": "edition",
         "chapter": "chapter"
     }
@@ -508,7 +508,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         "title": get_metadata_value("title"),
         "year": year or "",
         "doi": metadata.get("DOI", "") or "",
-        "pdf_link": pdf_output_dir + pdf_filename if pdf_filename else "PDF not available",
+        "pdf_link": pdf_filename if pdf_filename else "PDF not available",
         "bibtex": create_bibtex_string(metadata, alias)
     }
 
@@ -583,13 +583,13 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         })
     elif metadata.get("type") == "Book Chapter":
         placeholders.update({
-            "booktitle": get_metadata_value("container-title"),
+            "booktitle": get_metadata_value("collection-title"),
             "publisher": get_metadata_value("publisher"),
             "address": get_metadata_value("publisher-location"),
             "pages": get_metadata_value("page").replace("--", "-"),
             "editor_list": editor_list.rstrip(),
             "isbn": metadata.get("ISBN", [""])[0] or "",  # Take first ISBN if mu exist
-            "series": get_metadata_value("collection-title"),
+            "series": get_metadata_value("container-title"),
             "edition": get_metadata_value("edition"),
             "chapter": get_metadata_value("chapter")
         })
@@ -623,7 +623,7 @@ def save_markdown(content, alias, output_dir, title):
         title (str): Publication title
         
     Returns:
-        str: Path to saved file
+        str: Path to saved file, or None if file already exists
     """
     # Create year and quarter directories
     current_date = datetime.today()
@@ -636,6 +636,11 @@ def save_markdown(content, alias, output_dir, title):
     
     filename = f"{alias}_{clean_title_for_filename(title)}.md"
     filepath = os.path.join(quarter_dir, filename)
+    
+    # Check if file already exists
+    if os.path.exists(filepath):
+        print("Paper already exists")
+        return None
     
     # Ensure we're not double-escaping ampersands
     content = content.replace("\\&amp;", "\\&")
@@ -761,6 +766,20 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     alias = f"{first_author}{year}"
     title = metadata.get("title", "")
 
+    # Create year and quarter directories to check if file exists
+    current_date = datetime.today()
+    year = current_date.year
+    quarter = f"Q{(current_date.month-1)//3 + 1}"
+    year_dir = os.path.join(markdown_output_dir, str(year))
+    quarter_dir = os.path.join(year_dir, quarter)
+    filename = f"{alias}_{clean_title_for_filename(title)}.md"
+    filepath = os.path.join(quarter_dir, filename)
+
+    # Check if markdown file already exists
+    if os.path.exists(filepath):
+        print("Paper already exists")
+        return
+
     # Handle PDF
     pdf_filename = None
     if not skip_pdf:
@@ -782,7 +801,7 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
 
     # Create and save markdown
     content, _ = fill_template(template_path, metadata, pdf_filename, pdf_output_dir)
-    filepath = save_markdown(content, alias, markdown_output_dir, title)
+    save_markdown(content, alias, markdown_output_dir, title)
     print(f"Note created and moved to {filepath}")
 
     # Print BibTeX entry
