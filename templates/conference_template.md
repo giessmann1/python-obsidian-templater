@@ -16,12 +16,18 @@ address: "{{address}}"
 series: "{{series}}"
 editor: {{editor_list}}
 organization: "{{organization}}"
+track: "{{track}}"
+comments: "{{comments}}"
 doi: "[{{doi}}](https://doi.org/{{doi}})"
+howpublished: "{{howpublished}}"
+note: "{{note}}"
+abstract: "{{abstract}}"
+institutions: {{institutions_list}}
 type: "Conference Proceedings"
 topics:
 theories: 
 methods: 
-related_projects:
+related_projects: {{related_projects}}
 ---
 
 Write summary

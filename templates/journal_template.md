@@ -12,6 +12,8 @@ number: {{number}}
 pages: "{{pages}}"
 issn: "{{issn}}"
 doi: "[{{doi}}](https://doi.org/{{doi}})"
+howpublished: "{{howpublished}}"
+institutions: {{institutions_list}}
 type: "Journal Article"
 sjr_quartile: "{{sjr_quartile}}"
 h_index: {{h_index}}
@@ -20,9 +22,9 @@ sjr_publisher: "{{sjr_publisher}}"
 sjr_areas: {{sjr_areas}}
 sjr_year: {{sjr_year}}
 topics:
-theories: 
+theories:
 methods: 
-related_projects:
+related_projects: {{related_projects}}
 ---
 
 Write summary

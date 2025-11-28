@@ -19,7 +19,7 @@ type: "Book"
 topic:
 theories: 
 methods: 
-related_projects:
+related_projects: {{related_projects}}
 ---
 
 Write summary

@@ -11,10 +11,10 @@ month: {{month}}
 note: "Retrieved {{imported_date}}"
 doi: "[{{doi}}](https://doi.org/{{doi}})"
 type: "Misc"
-topic: 
+topics: 
 theories: 
 methods: 
-related_projects:
+related_projects: {{related_projects}}
 ---
 
 Write summary

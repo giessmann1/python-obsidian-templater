@@ -10,12 +10,77 @@ import subprocess
 import glob
 import argparse
 import html
+import re
 from datetime import datetime
+from urllib.parse import urlparse, urljoin
 from habanero import cn
 import pandas as pd
 from difflib import SequenceMatcher
 import csv
+import requests
+from bs4 import BeautifulSoup
 TEMPLATE_DIR = "templates"
+
+# Cache for SJR data to avoid reloading on every journal article
+_sjr_data_cache = None
+
+# Cache for AIS journal URLs
+_ais_journals_cache = None
+
+def load_ais_journal_urls():
+    """
+    Load AIS journal URLs from ais_journals.txt file.
+    
+    Returns:
+        set: Set of journal path prefixes (e.g., 'misqe', 'jais', 'cais')
+    """
+    global _ais_journals_cache
+    if _ais_journals_cache is not None:
+        return _ais_journals_cache
+    
+    journals_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ais_journals.txt')
+    journal_prefixes = set()
+    
+    if os.path.exists(journals_file):
+        with open(journals_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and 'aisel.aisnet.org' in line:
+                    # Extract the journal path (e.g., 'misqe' from 'https://aisel.aisnet.org/misqe/')
+                    parts = line.rstrip('/').split('/')
+                    if parts:
+                        journal_prefix = parts[-1]
+                        if journal_prefix:
+                            journal_prefixes.add(journal_prefix.lower())
+    
+    _ais_journals_cache = journal_prefixes
+    return journal_prefixes
+
+def is_ais_journal_url(url):
+    """
+    Check if an AIS eLibrary URL is from a journal (vs conference proceedings).
+    
+    Args:
+        url (str): The AIS eLibrary URL
+        
+    Returns:
+        bool: True if the URL is from a journal, False otherwise
+    """
+    journal_prefixes = load_ais_journal_urls()
+    
+    if not journal_prefixes:
+        return False
+    
+    # Parse the URL and check if any segment matches a journal prefix
+    # URLs like: https://aisel.aisnet.org/misqe/vol15/iss4/5/
+    parsed = urlparse(url)
+    path_parts = [p.lower() for p in parsed.path.strip('/').split('/') if p]
+    
+    for part in path_parts:
+        if part in journal_prefixes:
+            return True
+    
+    return False
 
 # Maps BibTeX fields to their corresponding metadata fields
 type_fields = {
@@ -125,9 +190,10 @@ def download_pdf_with_pypaperbot(doi, save_dir):
         os.makedirs(temp_dir, exist_ok=True)
         
         cmd = ["python3", "-m", "PyPaperBot", "--doi", doi, "--dwn-dir", temp_dir]
-        # Run subprocess with output redirected to devnull
+        # Run subprocess with output redirected to devnull and timeout
+        print(f"Running PyPaperBot (this may take a while)...")
         with open(os.devnull, 'w') as devnull:
-            subprocess.run(cmd, stdout=devnull, stderr=devnull, check=True)
+            subprocess.run(cmd, stdout=devnull, stderr=devnull, check=True, timeout=300)  # 5 minute timeout
 
         # Find the downloaded PDF in the temporary directory
         pdfs = sorted(glob.glob(os.path.join(temp_dir, "*.pdf")), key=os.path.getmtime, reverse=True)
@@ -144,15 +210,21 @@ def download_pdf_with_pypaperbot(doi, save_dir):
             shutil.rmtree(temp_dir)
             print("No PDF was found for this DOI")
             return None
+    except subprocess.TimeoutExpired:
+        # Clean up the temporary directory on timeout
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        print("PDF download timed out after 5 minutes")
+        return None
     except subprocess.CalledProcessError:
         # Clean up the temporary directory on error
-        if os.path.exists(temp_dir):
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         print("No PDF was found for this DOI")
         return None
     except Exception as e:
         # Clean up the temporary directory on any other error
-        if os.path.exists(temp_dir):
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         print(f"Error downloading PDF: {str(e)}")
         return None
@@ -235,6 +307,20 @@ def create_bibtex_string(metadata, alias):
         fields = {**common_fields, **{k: get_metadata_value(v) for k, v in type_fields["conference"].items()}}
         if editor_entries:
             fields["editor"] = editor_entries
+        # Add howpublished (AIS URL) if no DOI is present
+        if not fields.get("doi") or not fields["doi"].strip():
+            url = metadata.get("URL", "")
+            if url:
+                fields["howpublished"] = get_metadata_value("URL")
+        # Add paper_type as note if available
+        paper_type = metadata.get("paper_type", "")
+        if paper_type:
+            # Check if there's already a note field and append to it, or create new one
+            existing_note = fields.get("note", "")
+            if existing_note:
+                fields["note"] = f"{existing_note}, Paper Type: {paper_type}"
+            else:
+                fields["note"] = f"Paper Type: {paper_type}"
     elif "journal" in pub_type:
         entry_type = "article"
         fields = {**common_fields, **{k: get_metadata_value(v) for k, v in type_fields["journal"].items()}}
@@ -266,6 +352,10 @@ def create_bibtex_string(metadata, alias):
         # If there's already a double hyphen, keep it
         if "--" not in fields["pages"]:
             fields["pages"] = fields["pages"].replace("-", "--")
+    
+    # Remove empty DOI field from BibTeX
+    if "doi" in fields and (not fields["doi"] or not fields["doi"].strip()):
+        del fields["doi"]
 
     # Format BibTeX string
     bibtex = f"@{entry_type}{{{alias},\n"
@@ -277,13 +367,19 @@ def create_bibtex_string(metadata, alias):
 def load_sjr_data():
     """
     Load SCImago Journal Rankings data from CSV.
+    Uses a module-level cache to avoid reloading on every call.
     
     Returns:
         pd.DataFrame: DataFrame containing SJR data
     """
+    global _sjr_data_cache
+    if _sjr_data_cache is not None:
+        return _sjr_data_cache
+    
     try:
         # Try with different CSV parsing options
-        return pd.read_csv('scimagojr_2024.csv', sep=';', quoting=csv.QUOTE_ALL)
+        _sjr_data_cache = pd.read_csv('scimagojr_2024.csv', sep=';', quoting=csv.QUOTE_ALL)
+        return _sjr_data_cache
     except Exception as e:
         print(f"Warning: Could not load SJR data: {str(e)}")
         return None
@@ -327,26 +423,40 @@ def find_journal_metrics(journal_name, sjr_data):
         
     normalized_search = normalize_journal_name(journal_name)
     
-    # Try exact match first
-    exact_match = sjr_data[sjr_data['Title'].apply(normalize_journal_name) == normalized_search]
-    if not exact_match.empty:
+    # Try exact match first - use iloc for better performance than iterrows
+    print("Searching for exact match...")
+    exact_match = None
+    # Limit search to first 5000 rows for performance (most journals should be in top results)
+    max_search_rows = min(5000, len(sjr_data))
+    for idx in range(max_search_rows):
+        row = sjr_data.iloc[idx]
+        normalized_title = normalize_journal_name(row['Title'])
+        if normalized_title == normalized_search:
+            exact_match = row
+            break
+    
+    if exact_match is not None:
         # Split areas by semicolon and create a list
-        areas = exact_match.iloc[0]['Areas']
+        areas = exact_match['Areas']
         areas_list = [area.strip() for area in areas.split(';')] if pd.notna(areas) else []
         
         return {
-            'SJR Best Quartile': exact_match.iloc[0]['SJR Best Quartile'],
-            'H index': exact_match.iloc[0]['H index'],
-            'Citations / Doc. (2years)': exact_match.iloc[0]['Citations / Doc. (2years)'],
-            'Publisher': exact_match.iloc[0]['Publisher'],
+            'SJR Best Quartile': exact_match['SJR Best Quartile'],
+            'H index': exact_match['H index'],
+            'Citations / Doc. (2years)': exact_match['Citations / Doc. (2years)'],
+            'Publisher': exact_match['Publisher'],
             'Areas': areas_list
         }
     
     # Try fuzzy matching if no exact match
+    print("No exact match found, trying fuzzy matching...")
     best_ratio = 0
     best_match = None
     
-    for idx, row in sjr_data.iterrows():
+    # Limit fuzzy matching to first 10000 rows to prevent hanging on very large datasets
+    max_rows = min(10000, len(sjr_data))
+    for idx in range(max_rows):
+        row = sjr_data.iloc[idx]
         normalized_title = normalize_journal_name(row['Title'])
         ratio = SequenceMatcher(None, normalized_search, normalized_title).ratio()
         if ratio > 0.9 and ratio > best_ratio:
@@ -431,7 +541,7 @@ def get_first_valid_author(authors):
                     return clean_lastname_for_alias(parts[-1])
     return "Unknown"
 
-def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
+def fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related_projects=None):
     """
     Fill template with metadata and return formatted content.
     
@@ -440,6 +550,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         metadata (dict): Publication metadata
         pdf_filename (str): Name of PDF file
         pdf_output_dir (str): Directory containing PDF
+        related_projects (str): Related projects to add to the note (optional)
         
     Returns:
         tuple: (formatted content, citation key)
@@ -447,13 +558,24 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 
+    # Helper function to escape double quotes for YAML strings
+    def escape_yaml_quotes(value):
+        if isinstance(value, str):
+            # Escape double quotes by doubling them or using backslash
+            return value.replace('"', '\\"')
+        return value
+    
     # Helper function to safely get and format metadata values for markdown
-    def get_metadata_value(key, default=""):
+    def get_metadata_value(key, default="", escape_quotes=True):
         value = metadata.get(key, default)
         if isinstance(value, list):
             value = value[0] if value else default
         # Deescape any HTML entities
-        return html.unescape(str(value))
+        value = html.unescape(str(value))
+        # Escape double quotes for YAML if requested
+        if escape_quotes:
+            value = escape_yaml_quotes(value)
+        return value
 
     # Extract basic metadata
     year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
@@ -485,7 +607,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     status = "Imported" if pdf_filename else "NoPDF"
 
     # Format author and editor lists with newline only if there are items
-    author_list = "".join(f"  - \"{clean_author_name(a)}\"\n" for a in valid_authors)
+    author_list = "".join(f"  - \"{escape_yaml_quotes(clean_author_name(a))}\"\n" for a in valid_authors)
     author_list = f"\n{author_list}" if author_list else "No authors found"
     
     # Clean and filter editors (only if we haven't used them as authors)
@@ -496,7 +618,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         if cleaned_name:
             valid_editors.append(editor)
     
-    editor_list = "".join(f"  - \"{clean_author_name(e)}\"\n" for e in valid_editors)
+    editor_list = "".join(f"  - \"{escape_yaml_quotes(clean_author_name(e))}\"\n" for e in valid_editors)
     editor_list = f"\n{editor_list}" if editor_list else ""
 
     # Common placeholders for all types
@@ -509,15 +631,34 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
         "year": year or "",
         "doi": metadata.get("DOI", "") or "",
         "pdf_link": pdf_filename if pdf_filename else "PDF not available",
-        "bibtex": create_bibtex_string(metadata, alias)
+        "bibtex": create_bibtex_string(metadata, alias),
+        "related_projects": related_projects or ""
     }
 
     # Add journal metrics if this is a journal article
     if metadata.get("type") == "Journal Article":
         # Load SJR data
+        print("Loading SJR data...")
         sjr_data = load_sjr_data()
         journal_name = get_metadata_value("container-title")
+        print(f"Searching for journal metrics for: {journal_name}")
         journal_metrics = find_journal_metrics(journal_name, sjr_data)
+        print("Journal metrics lookup completed.")
+        
+        # Format institutions list for journals
+        institutions_list = ""
+        institutions = metadata.get("institutions", [])
+        if institutions:
+            institutions_list = "".join(f"  - \"{escape_yaml_quotes(inst)}\"\n" for inst in institutions)
+            institutions_list = f"\n{institutions_list}" if institutions_list else ""
+        
+        # Get howpublished (AIS URL) - only if there's no DOI
+        howpublished = ""
+        doi_value = metadata.get("DOI", "") or ""
+        if not doi_value:
+            url = metadata.get("URL", "")
+            if url:
+                howpublished = url
         
         # Add journal-specific placeholders
         placeholders.update({
@@ -525,7 +666,9 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
             "volume": get_metadata_value("volume"),
             "number": get_metadata_value("issue"),
             "pages": get_metadata_value("page"),
-            "issn": metadata.get("ISSN", [""])[0] if isinstance(metadata.get("ISSN"), list) else metadata.get("ISSN", "")
+            "issn": metadata.get("ISSN", [""])[0] if isinstance(metadata.get("ISSN"), list) else metadata.get("ISSN", ""),
+            "institutions_list": institutions_list.rstrip(),
+            "howpublished": howpublished
         })
         
         if journal_metrics:
@@ -558,6 +701,42 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
 
     # Add type-specific placeholders
     if metadata.get("type") == "Conference Proceedings":
+        # Format institutions list
+        institutions_list = ""
+        institutions = metadata.get("institutions", [])
+        if institutions:
+            institutions_list = "".join(f"  - \"{escape_yaml_quotes(inst)}\"\n" for inst in institutions)
+            institutions_list = f"\n{institutions_list}" if institutions_list else ""
+        
+        # Get abstract (can come from CrossRef or HTML extraction)
+        abstract = metadata.get("abstract", "")
+        # If abstract is a list, take the first element
+        if isinstance(abstract, list) and abstract:
+            abstract = abstract[0]
+        if not abstract:
+            abstract = ""
+        # Escape double quotes for YAML
+        abstract = escape_yaml_quotes(abstract)
+        
+        # Get howpublished (AIS URL) - only if there's no DOI
+        howpublished = ""
+        doi_value = metadata.get("DOI", "") or ""
+        if not doi_value:
+            # No DOI, so add the AIS URL if available
+            url = metadata.get("URL", "")
+            if url:
+                howpublished = url
+        
+        # Get note (paper_type if available)
+        note = ""
+        paper_type = metadata.get("paper_type", "")
+        if paper_type:
+            note = f"Paper Type: {paper_type}"
+        
+        # Get track and comments info if available (escape quotes for YAML)
+        track = escape_yaml_quotes(metadata.get("track", ""))
+        comments = escape_yaml_quotes(metadata.get("comments", ""))
+        
         placeholders.update({
             "booktitle": get_metadata_value("container-title"),
             "month": month or "",
@@ -568,7 +747,13 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
             "editor_list": editor_list.rstrip(),
             "publisher": get_metadata_value("publisher"),
             "address": get_metadata_value("publisher-location"),
-            "organization": get_metadata_value("event.name")
+            "organization": get_metadata_value("event.name"),
+            "abstract": abstract,
+            "institutions_list": institutions_list.rstrip(),
+            "howpublished": howpublished,
+            "note": note,
+            "track": track,
+            "comments": comments
         })
     elif metadata.get("type") == "Book":
         placeholders.update({
@@ -597,6 +782,23 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir):
     # Replace all placeholders in template
     for key, val in placeholders.items():
         content = content.replace(f"{{{{{key}}}}}", str(val))
+    
+    # Handle empty DOI - remove the entire DOI line if DOI is empty
+    doi_value = placeholders.get("doi", "")
+    if not doi_value or doi_value.strip() == "":
+        # Remove the DOI line (handles different formats)
+        # Match lines like "doi: "[...](...)" or "doi: ..." with optional whitespace
+        content = re.sub(r'^doi:\s*.*$', '', content, flags=re.MULTILINE)
+        # Clean up any double newlines that might result
+        content = re.sub(r'\n\n\n+', '\n\n', content)
+    
+    # Handle empty note - remove the entire note line if note is empty
+    note_value = placeholders.get("note", "")
+    if not note_value or note_value.strip() == "":
+        # Remove the note line
+        content = re.sub(r'^note:\s*.*$', '', content, flags=re.MULTILINE)
+        # Clean up any double newlines that might result
+        content = re.sub(r'\n\n\n+', '\n\n', content)
 
     return content, alias
 
@@ -700,16 +902,645 @@ def check_required_fields(metadata, pub_type):
         return missing_fields
     return []
 
-def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_type=None, skip_pdf=False, local_pdf=None):
+def normalize_ais_url(ais_input):
     """
-    Process a DOI: fetch metadata, download PDF, create note.
+    Normalize AIS eLibrary URL or path to a consistent format.
+    
+    Handles both:
+    - Full URLs: "https://aisel.aisnet.org/icis2024/general_is/general_is/11/"
+    - Shortened paths: "icis2024/general_is/general_is/11/"
+    
+    Args:
+        ais_input (str): AIS eLibrary URL or path
+        
+    Returns:
+        tuple: (normalized_path, full_url)
+            - normalized_path: Path without domain (e.g., "icis2024/general_is/general_is/11/")
+            - full_url: Complete URL (e.g., "https://aisel.aisnet.org/icis2024/general_is/general_is/11/")
     """
-    # Fetch metadata
-    metadata, pub_type = get_metadata_from_doi(doi)
-    if not metadata:
-        print("Exiting: Cannot proceed without metadata")
-        exit(1)
+    # Remove leading/trailing whitespace
+    ais_input = ais_input.strip()
+    
+    # Base URL for AIS eLibrary
+    base_url = "https://aisel.aisnet.org"
+    
+    # If it's a full URL, extract the path
+    if ais_input.startswith("http://") or ais_input.startswith("https://"):
+        # Parse URL to extract path
+        parsed = urlparse(ais_input)
+        # Get path and remove leading/trailing slashes
+        path = parsed.path.strip("/")
+        # Reconstruct full URL
+        full_url = f"{parsed.scheme}://{parsed.netloc}/{path}/"
+        return path, full_url
+    
+    # If it's already a shortened path, construct full URL
+    path = ais_input.strip("/")
+    full_url = f"{base_url}/{path}/"
+    return path, full_url
 
+def fetch_ais_html(ais_url):
+    """
+    Fetch HTML content from AIS eLibrary URL.
+    
+    Args:
+        ais_url (str): Full AIS eLibrary URL
+        
+    Returns:
+        BeautifulSoup: Parsed HTML content or None if failed
+    """
+    try:
+        response = requests.get(ais_url, timeout=10)
+        response.raise_for_status()
+        return BeautifulSoup(response.content, 'html.parser')
+    except Exception as e:
+        print(f"Error fetching HTML from {ais_url}: {str(e)}")
+        return None
+
+def extract_doi_from_html(soup):
+    """
+    Extract DOI from a div with ID "doi" in the HTML.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        
+    Returns:
+        str: DOI string if found and valid, None otherwise
+    """
+    if soup is None:
+        return None
+    
+    doi_div = soup.find('div', id='doi')
+    if doi_div:
+        p_tag = doi_div.find('p')
+        if p_tag:
+            doi_text = p_tag.get_text().strip()
+            # Only return if we have actual content that looks like a DOI
+            # A valid DOI typically starts with "10." (DOI prefix)
+            if doi_text and len(doi_text) > 0:
+                # Check if it looks like a DOI (contains "10." prefix)
+                if '10.' in doi_text or doi_text.startswith('10.'):
+                    return doi_text
+                # If the div exists but doesn't contain a valid DOI, return None
+                # This handles cases where the div exists but is empty or has placeholder text
+    return None
+
+def extract_paper_number_from_html(soup):
+    """
+    Extract paper number from a div with ID "paper_no" in the HTML.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        
+    Returns:
+        str: Paper number string if found, None otherwise
+    """
+    if soup is None:
+        return None
+    
+    paper_no_div = soup.find('div', id='paper_no')
+    if paper_no_div:
+        p_tag = paper_no_div.find('p')
+        if p_tag:
+            paper_no_text = p_tag.get_text().strip()
+            if paper_no_text and len(paper_no_text) > 0:
+                return paper_no_text
+    return None
+
+def extract_paper_type_from_html(soup):
+    """
+    Extract paper type from a div with ID "paper_type" in the HTML.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        
+    Returns:
+        str: Paper type string if found, None otherwise
+    """
+    if soup is None:
+        return None
+    
+    paper_type_div = soup.find('div', id='paper_type')
+    if paper_type_div:
+        p_tag = paper_type_div.find('p')
+        if p_tag:
+            paper_type_text = p_tag.get_text().strip()
+            if paper_type_text and len(paper_type_text) > 0:
+                return paper_type_text
+    return None
+
+def extract_ais_pdf_url(soup, base_url):
+    """
+    Extract PDF download URL from AIS eLibrary page.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        base_url (str): Base URL of the AIS page
+        
+    Returns:
+        str: PDF download URL if found, None otherwise
+    """
+    if soup is None:
+        print("Error: Cannot extract PDF URL - HTML content is None")
+        return None
+    
+    # Look for link with id="pdf"
+    pdf_link = soup.find('a', id='pdf', href=True)
+    if pdf_link:
+        href = pdf_link.get('href', '')
+        # Clean up HTML entities in URL (e.g., &amp; -> &)
+        href = html.unescape(href)
+        # Make URL absolute if it's relative
+        if href.startswith('http'):
+            return href
+        else:
+            return urljoin(base_url, href)
+    else:
+        print("Error: PDF download link with id='pdf' not found on AIS page")
+        return None
+
+def download_pdf_from_url(pdf_url, save_dir):
+    """
+    Download PDF from a direct URL.
+    
+    Args:
+        pdf_url (str): URL to the PDF file
+        save_dir (str): Directory to save the PDF
+        
+    Returns:
+        str: Path to downloaded PDF or None if failed
+    """
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Get the PDF filename from URL or generate one
+        from urllib.parse import urlparse
+        parsed_url = urlparse(pdf_url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename or not filename.endswith('.pdf'):
+            filename = f"downloaded_{hash(pdf_url) % 10000}.pdf"
+        
+        pdf_path = os.path.join(save_dir, filename)
+        
+        # Prepare cookies for AIS eLibrary authentication
+        cookies = {}
+        if 'aisel.aisnet.org' in pdf_url:
+            # AIS eLibrary requires authentication cookie for PDF downloads
+            # Read cookie from .secrets.txt JSON file in the script's directory
+            secrets_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.secrets.txt')
+            ais_cookie = ''
+            if os.path.exists(secrets_file):
+                with open(secrets_file, 'r') as f:
+                    secrets = json.load(f)
+                    ais_cookie = secrets.get('ais_auth_cookie', '')
+            cookies['BPAuth201311'] = ais_cookie
+        
+        # Download the PDF
+        print(f"Downloading PDF from: {pdf_url}")
+        response = requests.get(pdf_url, timeout=30, stream=True, cookies=cookies if cookies else None)
+        response.raise_for_status()
+        
+        # Check if it's actually a PDF
+        content_type = response.headers.get('content-type', '').lower()
+        if 'pdf' not in content_type and not pdf_url.endswith('.pdf'):
+            print("Warning: URL does not appear to be a PDF")
+        
+        # Save the PDF
+        with open(pdf_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        print(f"PDF downloaded successfully from AIS")
+        return pdf_path
+    except Exception as e:
+        print(f"Error downloading PDF from URL: {str(e)}")
+        return None
+
+def extract_citation_metadata(soup):
+    """
+    Extract volume, issue, pages, and journal name from the recommended citation div.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        
+    Returns:
+        dict: Dictionary with 'volume', 'issue', 'pages', 'journal' keys (values may be empty)
+    """
+    result = {'volume': '', 'issue': '', 'pages': '', 'journal': ''}
+    
+    citation_div = soup.find('div', id='recommended_citation')
+    if not citation_div:
+        return result
+    
+    # Extract journal name from <em> tag
+    em_tag = citation_div.find('em')
+    if em_tag:
+        result['journal'] = em_tag.get_text(strip=True)
+    
+    # Get the full text content for parsing
+    citation_text = citation_div.get_text()
+    
+    # Try to extract volume and issue
+    # Pattern 1: "(49: 3)" format (volume: issue)
+    vol_iss_match = re.search(r'\((\d+):\s*(\d+)\)', citation_text)
+    if vol_iss_match:
+        result['volume'] = vol_iss_match.group(1)
+        result['issue'] = vol_iss_match.group(2)
+    else:
+        # Pattern 2: "Vol. 16 : Iss. 1" format
+        vol_match = re.search(r'Vol\.?\s*(\d+)', citation_text)
+        if vol_match:
+            result['volume'] = vol_match.group(1)
+        iss_match = re.search(r'Iss\.?\s*(\d+)', citation_text)
+        if iss_match:
+            result['issue'] = iss_match.group(1)
+    
+    # Try to extract pages
+    # Pattern 1: "pp.917-952" or "pp.iii-xi"
+    pages_match = re.search(r'pp\.?\s*([ivxlcdm\d]+-[ivxlcdm\d]+)', citation_text, re.IGNORECASE)
+    if pages_match:
+        result['pages'] = pages_match.group(1)
+    else:
+        # Pattern 2: Just page numbers like "917-952"
+        pages_match = re.search(r'(\d+-\d+)', citation_text)
+        if pages_match:
+            result['pages'] = pages_match.group(1)
+    
+    return result
+
+def extract_ais_metadata_from_html(soup, full_url):
+    """
+    Extract metadata from AIS eLibrary HTML page.
+    
+    Args:
+        soup (BeautifulSoup): Parsed HTML content
+        full_url (str): Full URL of the AIS page
+        
+    Returns:
+        tuple: (metadata dict, publication type) or (None, None) if failed
+    """
+    if soup is None:
+        return None, None
+    
+    metadata = {}
+    
+    # Extract title (usually in h1 or h2)
+    title_elem = soup.find('h1') or soup.find('h2')
+    if title_elem:
+        metadata['title'] = title_elem.get_text(strip=True)
+    
+    # Extract authors from "Presenter Information" or "Authors" section
+    authors = []
+    institutions = []
+    # Look for "Presenter Information" or "Authors" heading
+    presenter_heading = soup.find(string=lambda text: text and 'Presenter Information' in text)
+    if not presenter_heading:
+        # Also try "Authors" heading (used on some AIS pages)
+        presenter_heading = soup.find(string=lambda text: text and text.strip() == 'Authors')
+    if presenter_heading:
+        # Find the parent element (usually a heading tag)
+        parent = presenter_heading.find_parent(['h2', 'h3', 'h4', 'div', 'section'])
+        if parent:
+            # Look for all bold/strong elements after the heading (these contain author names)
+            for bold in parent.find_all_next(['b', 'strong'], limit=20):
+                author_text = bold.get_text(strip=True)
+                # Skip common non-author text
+                skip_texts = ['Presenter Information', 'Authors', 'Follow', 'Paper Number', 'Paper Type', 
+                              'Abstract', 'Comments', 'Recommended Citation', 'Download', 
+                              'Author Connect Link', 'DOWNLOADS', 'Share', 'COinS', 'Paper',
+                              'Additional Files', 'Additional files']
+                if author_text and author_text not in skip_texts:
+                    # Remove "Follow" if present
+                    author_text = author_text.replace('Follow', '').strip()
+                    if author_text:
+                        # Try to find institution in the next sibling (often in italics or after comma)
+                        institution = ""
+                        # Check if there's italic text or em tag next to the bold tag
+                        next_sibling = bold.find_next_sibling(['em', 'i'])
+                        if next_sibling:
+                            institution = next_sibling.get_text(strip=True).replace('Follow', '').strip()
+                        else:
+                            # Check if institution is in the same text after a comma
+                            if ',' in author_text:
+                                parts = author_text.split(',')
+                                author_text = parts[0].strip()
+                                institution = parts[1].strip() if len(parts) > 1 else ""
+                        
+                        # Split name into given and family
+                        name_parts = author_text.split()
+                        if len(name_parts) >= 2:
+                            given = ' '.join(name_parts[:-1])
+                            family = name_parts[-1]
+                            authors.append({'given': given, 'family': family})
+                            if institution:
+                                institutions.append(institution)
+                        elif len(name_parts) == 1 and len(name_parts[0]) > 2:
+                            # Single name - might be last name only
+                            authors.append({'given': '', 'family': name_parts[0]})
+                            if institution:
+                                institutions.append(institution)
+                        # Stop if we've found reasonable number of authors
+                        if len(authors) >= 10:
+                            break
+            # Stop searching after we've processed the presenter section
+            if authors:
+                pass  # Already found authors
+    
+    # Alternative: look for patterns like "Name, Institution_Follow" in the page
+    if not authors:
+        # Look for text patterns that match author format
+        for elem in soup.find_all(['p', 'div', 'span']):
+            text = elem.get_text(strip=True)
+            # Pattern: "Name, Institution" followed by "Follow" or similar
+            if text and '_' in text and any(x in text.lower() for x in ['university', 'college', 'school']):
+                # Try to extract author names
+                lines = text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line and ',' in line:
+                        parts = line.split(',')
+                        name_part = parts[0].strip()
+                        institution = parts[1].strip() if len(parts) > 1 else ""
+                        name_parts = name_part.split()
+                        if len(name_parts) >= 2:
+                            given = ' '.join(name_parts[:-1])
+                            family = name_parts[-1]
+                            authors.append({'given': given, 'family': family})
+                            if institution:
+                                institutions.append(institution)
+                            if len(authors) >= 10:
+                                break
+                if authors:
+                    break
+    
+    metadata['author'] = authors if authors else []
+    metadata['institutions'] = institutions if institutions else []
+    
+    # Extract paper number (maps to "number" field in templates)
+    paper_number = extract_paper_number_from_html(soup)
+    if paper_number:
+        metadata['issue'] = paper_number  # "issue" maps to "number" in templates
+    
+    # Extract paper type
+    paper_type = extract_paper_type_from_html(soup)
+    if paper_type:
+        metadata['paper_type'] = paper_type
+    
+    # Extract track info (if available)
+    track_div = soup.find('div', id='track')
+    if track_div:
+        track_p = track_div.find('p')
+        if track_p:
+            track_text = track_p.get_text(strip=True)
+            if track_text:
+                metadata['track'] = track_text
+    
+    # Extract comments (if available)
+    comments_div = soup.find('div', id='comments')
+    if comments_div:
+        comments_p = comments_div.find('p')
+        if comments_p:
+            comments_text = comments_p.get_text(strip=True)
+            if comments_text:
+                metadata['comments'] = comments_text
+    
+    # Extract abstract
+    abstract_heading = soup.find(string=lambda text: text and 'Abstract' in text)
+    if abstract_heading:
+        parent = abstract_heading.find_parent(['h2', 'h3', 'h4', 'div', 'section'])
+        if parent:
+            # Find the next paragraph or div containing abstract text
+            # Try to get all paragraphs until we hit another heading or section
+            abstract_parts = []
+            current = parent.find_next(['p', 'div'])
+            while current:
+                # Stop if we hit another heading
+                if current.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                    break
+                text = current.get_text(strip=True)
+                # Skip if it's too short or looks like a heading
+                if text and len(text) > 10 and text not in ['Abstract', 'Paper Number', 'Paper Type']:
+                    abstract_parts.append(text)
+                # Move to next sibling
+                current = current.find_next_sibling(['p', 'div'])
+                # Limit to prevent going too far
+                if len(abstract_parts) >= 5:
+                    break
+            
+            if abstract_parts:
+                # Join all abstract parts
+                abstract_text = ' '.join(abstract_parts)
+                # Clean up abstract text (remove extra whitespace)
+                abstract_text = ' '.join(abstract_text.split())
+                if abstract_text and len(abstract_text) > 20:  # Reasonable minimum length
+                    metadata['abstract'] = abstract_text
+            else:
+                # Fallback: just get the first paragraph/div
+                next_elem = parent.find_next(['p', 'div'])
+                if next_elem:
+                    abstract_text = next_elem.get_text(strip=True)
+                    # Clean up abstract text (remove extra whitespace)
+                    abstract_text = ' '.join(abstract_text.split())
+                    if abstract_text and len(abstract_text) > 20:  # Reasonable minimum length
+                        metadata['abstract'] = abstract_text
+    
+    # Extract year from URL or page
+    # AIS URLs often contain year: e.g., amcis2025, icis2024
+    year = None
+    if full_url:
+        year_match = re.search(r'(\d{4})', full_url)
+        if year_match:
+            year = int(year_match.group(1))
+    
+    # If not found in URL, try to extract from page
+    if not year:
+        year_elem = soup.find(string=lambda text: text and re.search(r'\b(19|20)\d{2}\b', text) if text else False)
+        if year_elem:
+            year_match = re.search(r'\b(19|20)\d{2}\b', year_elem)
+            if year_match:
+                year = int(year_match.group())
+    
+    # Extract conference/proceedings name (booktitle)
+    booktitle = None
+    # Look for conference name in breadcrumbs or headings
+    breadcrumb = soup.find('nav', class_=lambda x: x and 'breadcrumb' in x.lower()) or \
+                 soup.find(string=lambda text: text and ('Proceedings' in text or 'Conference' in text))
+    if breadcrumb:
+        if isinstance(breadcrumb, str):
+            # Extract conference name
+            if 'AMCIS' in breadcrumb:
+                booktitle = 'AMCIS Proceedings'
+            elif 'ICIS' in breadcrumb:
+                booktitle = 'ICIS Proceedings'
+            elif 'ECIS' in breadcrumb:
+                booktitle = 'ECIS Proceedings'
+            else:
+                # Try to extract from breadcrumb text
+                parts = breadcrumb.split()
+                for i, part in enumerate(parts):
+                    if 'Proceedings' in part and i > 0:
+                        booktitle = ' '.join(parts[max(0, i-2):i+1])
+                        break
+        else:
+            text = breadcrumb.get_text()
+            if 'AMCIS' in text:
+                booktitle = 'AMCIS Proceedings'
+            elif 'ICIS' in text:
+                booktitle = 'ICIS Proceedings'
+            elif 'ECIS' in text:
+                booktitle = 'ECIS Proceedings'
+    
+    # Set issued date
+    if year:
+        metadata['issued'] = {'date-parts': [[year]]}
+    
+    # Set container-title (booktitle for conferences)
+    if booktitle:
+        metadata['container-title'] = booktitle
+    
+    # Determine if this is a journal or conference based on URL
+    if is_ais_journal_url(full_url):
+        metadata['type'] = 'Journal Article'
+        pub_type = 'journal'
+        
+        # Extract volume, issue, pages, and journal name from recommended citation
+        citation_data = extract_citation_metadata(soup)
+        
+        # Set journal name (container-title)
+        if citation_data['journal']:
+            metadata['container-title'] = citation_data['journal']
+        elif not metadata.get('container-title'):
+            # Fallback: try to extract journal name from the page
+            journal_name_elem = soup.find('div', id='series-title') or soup.find('h1', class_='series-title')
+            if journal_name_elem:
+                metadata['container-title'] = journal_name_elem.get_text(strip=True)
+        
+        # Set volume, issue, and pages from citation
+        if citation_data['volume']:
+            metadata['volume'] = citation_data['volume']
+        if citation_data['issue']:
+            metadata['issue'] = citation_data['issue']
+        if citation_data['pages']:
+            metadata['page'] = citation_data['pages']
+    else:
+        metadata['type'] = 'Conference Proceedings'
+        pub_type = 'conference'
+    
+    # Set URL
+    metadata['URL'] = full_url
+    
+    # Extract DOI if available (though this function is for non-DOI cases)
+    doi = extract_doi_from_html(soup)
+    if doi:
+        metadata['DOI'] = doi
+    
+    return metadata, pub_type
+
+def process_ais_paper(ais_id, template_dir, markdown_output_dir, pdf_output_dir, skip_pdf=False, local_pdf=None, related_projects=None):
+    """
+    Process an AIS eLibrary paper: fetch metadata, download PDF, create note.
+    
+    Args:
+        ais_id (str): AIS eLibrary paper ID, URL, or path
+        template_dir (str): Directory containing templates
+        markdown_output_dir (str): Directory for markdown output
+        pdf_output_dir (str): Directory for PDF output
+        skip_pdf (bool): Whether to skip PDF download
+        local_pdf (str): Path to local PDF file
+        related_projects (str): Related projects to add to the note
+    """
+    # Normalize the AIS input (handle both full URLs and shortened paths)
+    normalized_path, full_url = normalize_ais_url(ais_id)
+    
+    print(f"Processing AIS eLibrary paper: {ais_id}")
+    print(f"Normalized path: {normalized_path}")
+    print(f"Full URL: {full_url}")
+    
+    # Fetch HTML from the AIS URL
+    print("Fetching HTML from AIS eLibrary...")
+    soup = fetch_ais_html(full_url)
+    
+    if soup is None:
+        print("Failed to fetch HTML from AIS eLibrary")
+        return
+    
+    # Try to download PDF from AIS website first (for both DOI and non-DOI cases)
+    pdf_path = None
+    if not skip_pdf and not local_pdf:
+        print("Attempting to download PDF from AIS website...")
+        pdf_url = extract_ais_pdf_url(soup, full_url)
+        if pdf_url:
+            pdf_path = download_pdf_from_url(pdf_url, "/tmp")
+            if pdf_path:
+                print(f"PDF downloaded from AIS website: {pdf_url}")
+            else:
+                print("Failed to download PDF from AIS website")
+        else:
+            print("No PDF download link found on AIS page")
+    
+    # Extract DOI from HTML
+    doi = extract_doi_from_html(soup)
+    
+    if doi:
+        print(f"Found DOI in AIS page: {doi}")
+        # Use the same CrossRef API approach as with regular DOI processing
+        metadata, pub_type = get_metadata_from_doi(doi)
+        if metadata:
+            # Successfully retrieved metadata from CrossRef
+            print("Successfully retrieved metadata from CrossRef")
+            # If we have a PDF from AIS, use it; otherwise try DOI-based download
+            if pdf_path:
+                # Use the AIS PDF we already downloaded
+                process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
+                                 None, True, pdf_path, doi, related_projects)  # skip_pdf=True, local_pdf=pdf_path
+            else:
+                # Process with DOI-based PDF download
+                process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
+                                 None, skip_pdf, local_pdf, doi, related_projects)
+            return
+        else:
+            # DOI lookup failed, fall back to HTML extraction
+            print("DOI lookup failed, falling back to HTML extraction...")
+    else:
+        print("No DOI found in AIS page.")
+    
+    # No DOI found or DOI lookup failed - extract metadata from HTML
+    print("Extracting metadata from HTML...")
+    metadata, pub_type = extract_ais_metadata_from_html(soup, full_url)
+    
+    if not metadata or not metadata.get('title'):
+        print("Failed to extract sufficient metadata from AIS page")
+        return
+    
+    print(f"Extracted metadata: {metadata.get('title', 'Unknown title')}")
+    
+    # Process metadata using the shared function
+    # If we have a PDF from AIS, use it
+    if pdf_path:
+        process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
+                         None, True, pdf_path, None, related_projects)  # skip_pdf=True, local_pdf=pdf_path
+    else:
+        process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
+                         None, skip_pdf, local_pdf, None, related_projects)
+
+def process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir, 
+                     force_type=None, skip_pdf=False, local_pdf=None, doi=None, related_projects=None):
+    """
+    Process metadata to create Obsidian note: select template, handle PDF, create markdown.
+    This is the core processing function that can be used by both DOI and AIS processing.
+    
+    Args:
+        metadata (dict): Publication metadata
+        pub_type (str): Publication type
+        template_dir (str): Directory containing templates
+        markdown_output_dir (str): Directory for markdown output
+        pdf_output_dir (str): Directory for PDF output
+        force_type (str): Force publication type (optional)
+        skip_pdf (bool): Whether to skip PDF download
+        local_pdf (str): Path to local PDF file (optional)
+        doi (str): DOI string for PDF download (optional)
+        related_projects (str): Related projects to add to the note (optional)
+    """
     # Override publication type if forced
     if force_type:
         pub_type = force_type
@@ -739,8 +1570,8 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     }
     template_path = os.path.join(template_dir, template_mapping.get(pub_type, "misc_template.md"))
 
-    # Extract year from metadata
-    year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
+    # Extract publication year from metadata
+    pub_year = metadata.get("issued", {}).get("date-parts", [[None]])[0][0]
 
     # Clean and filter authors
     authors = metadata.get("author", [])
@@ -763,14 +1594,14 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     
     # Get first valid author for alias
     first_author = get_first_valid_author(valid_authors)
-    alias = f"{first_author}{year}"
+    alias = f"{first_author}{pub_year}"
     title = metadata.get("title", "")
 
     # Create year and quarter directories to check if file exists
     current_date = datetime.today()
-    year = current_date.year
+    current_year = current_date.year
     quarter = f"Q{(current_date.month-1)//3 + 1}"
-    year_dir = os.path.join(markdown_output_dir, str(year))
+    year_dir = os.path.join(markdown_output_dir, str(current_year))
     quarter_dir = os.path.join(year_dir, quarter)
     filename = f"{alias}_{clean_title_for_filename(title)}.md"
     filepath = os.path.join(quarter_dir, filename)
@@ -782,25 +1613,25 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
 
     # Handle PDF
     pdf_filename = None
-    if not skip_pdf:
-        if local_pdf:
-            # Use local PDF
-            if os.path.exists(local_pdf):
-                pdf_filename = rename_and_copy_pdf(local_pdf, alias, pdf_output_dir, title)
-                print(f"PDF moved to {pdf_output_dir}/{pdf_filename}")
-            else:
-                print(f"Warning: Local PDF not found at {local_pdf}")
+    if local_pdf:
+        # Use local PDF (always process if provided, regardless of skip_pdf)
+        if os.path.exists(local_pdf):
+            pdf_filename = rename_and_copy_pdf(local_pdf, alias, pdf_output_dir, title)
+            print(f"PDF moved to {pdf_output_dir}/{pdf_filename}")
         else:
-            # Download PDF
-            pdf_path = download_pdf_with_pypaperbot(doi, "/tmp")
-            if pdf_path:
-                pdf_filename = rename_and_copy_pdf(pdf_path, alias, pdf_output_dir, title)
-                print(f"PDF moved to {pdf_output_dir}/{pdf_filename}")
-            else:
-                print("PDF not downloaded.")
+            print(f"Warning: Local PDF not found at {local_pdf}")
+    elif not skip_pdf and doi:
+        # Download PDF using DOI
+        print(f"Attempting to download PDF for DOI: {doi}")
+        pdf_path = download_pdf_with_pypaperbot(doi, "/tmp")
+        if pdf_path:
+            pdf_filename = rename_and_copy_pdf(pdf_path, alias, pdf_output_dir, title)
+            print(f"PDF moved to {pdf_output_dir}/{pdf_filename}")
+        else:
+            print("PDF not downloaded.")
 
     # Create and save markdown
-    content, _ = fill_template(template_path, metadata, pdf_filename, pdf_output_dir)
+    content, _ = fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related_projects)
     save_markdown(content, alias, markdown_output_dir, title)
     print(f"Note created and moved to {filepath}")
 
@@ -810,6 +1641,20 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     # Ensure proper ampersand handling in printed BibTeX
     bibtex = bibtex.replace("\\&amp;", "\\&")
     print(bibtex)
+
+def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_type=None, skip_pdf=False, local_pdf=None, related_projects=None):
+    """
+    Process a DOI: fetch metadata, download PDF, create note.
+    """
+    # Fetch metadata
+    metadata, pub_type = get_metadata_from_doi(doi)
+    if not metadata:
+        print("Exiting: Cannot proceed without metadata")
+        exit(1)
+
+    # Process metadata using the shared function
+    process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
+                     force_type, skip_pdf, local_pdf, doi, related_projects)
 
 def read_directories():
     """
@@ -858,6 +1703,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Process a DOI and create Obsidian notes with optional PDF download.')
     parser.add_argument('-doi', help='The DOI to process')
+    parser.add_argument('-ais', help='AIS eLibrary paper ID or URL to process')
     parser.add_argument('--markdown-dir', default=directories['markdown_dir'],
                       help=f'Directory for markdown output (default: {directories["markdown_dir"]})')
     parser.add_argument('--pdf-dir', default=directories['pdf_dir'],
@@ -866,18 +1712,35 @@ def main():
                       help='Force the DOI to be treated as a specific type')
     parser.add_argument('--skip-pdf', action='store_true', help='Skip PDF download and only create markdown')
     parser.add_argument('--local-pdf', help='Path to a local PDF file to use instead of downloading')
+    parser.add_argument('--related-projects', help='Related projects to add to the note (e.g., "[[Project A]], [[Project B]]")')
 
     args = parser.parse_args()
 
-    process_doi(
+    # Process AIS eLibrary paper if -ais flag is provided
+    if args.ais:
+        process_ais_paper(
+            args.ais,
+            TEMPLATE_DIR,  # Use hard-coded template directory
+            args.markdown_dir,
+            args.pdf_dir,
+            args.skip_pdf,
+            args.local_pdf,
+            args.related_projects
+        )
+    # Process DOI if -doi flag is provided
+    elif args.doi:
+        process_doi(
         args.doi,
         TEMPLATE_DIR,  # Use hard-coded template directory
         args.markdown_dir,
         args.pdf_dir,
         args.force_type,
         args.skip_pdf,
-        args.local_pdf
+        args.local_pdf,
+        args.related_projects
     )
+    else:
+        parser.error('Either -doi or -ais must be provided')
 
 if __name__ == "__main__":
     main()
