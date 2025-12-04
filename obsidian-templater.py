@@ -140,18 +140,24 @@ def get_metadata_from_doi(doi):
         metadata_str = cn.content_negotiation(ids=doi, format="citeproc-json")
         metadata = json.loads(metadata_str)
         
+        # Safely get container-title as a string (it can be a list or string)
+        container_title = metadata.get("container-title", "")
+        if isinstance(container_title, list):
+            container_title = container_title[0] if container_title else ""
+        container_title_lower = container_title.lower() if container_title else ""
+        
         # Determine publication type based on metadata
         pub_type = "Misc"  # default type
         
         if metadata.get("type") == "proceedings-article" or \
-           "conference" in metadata.get("container-title", "").lower() or \
-           "proceedings" in metadata.get("container-title", "").lower():
+           "conference" in container_title_lower or \
+           "proceedings" in container_title_lower:
             pub_type = "conference"
             metadata["type"] = "Conference Proceedings"
         elif metadata.get("type") == "book-chapter":
             pub_type = "chapter"
             metadata["type"] = "Book Chapter"
-        elif metadata.get("type") == "book":
+        elif metadata.get("type") in ("book", "edited-book", "monograph"):
             pub_type = "book"
             metadata["type"] = "Book"
         elif metadata.get("type") == "journal-article":
@@ -814,6 +820,36 @@ def clean_title_for_filename(title):
     """
     return ''.join(c for c in title if c.isalnum() or c.isspace()).replace(' ', '_')
 
+def check_paper_exists(markdown_output_dir, alias, title):
+    """
+    Check if a paper with the given alias already exists in any subdirectory.
+    Searches recursively through all year/quarter folders.
+    
+    Args:
+        markdown_output_dir (str): Base directory for markdown files
+        alias (str): Citation key (e.g., "Smith2024")
+        title (str): Publication title
+        
+    Returns:
+        str: Path to existing file if found, None otherwise
+    """
+    # Clean the title for filename matching
+    cleaned_title = clean_title_for_filename(title)
+    filename = f"{alias}_{cleaned_title}.md"
+    
+    # Search recursively in all subdirectories
+    for root, dirs, files in os.walk(markdown_output_dir):
+        for file in files:
+            # Exact match
+            if file == filename:
+                return os.path.join(root, file)
+            # Also match files with same alias prefix (same first author and year)
+            # This catches cases where title might have minor differences
+            if file.startswith(f"{alias}_") and file.endswith(".md"):
+                return os.path.join(root, file)
+    
+    return None
+
 def save_markdown(content, alias, output_dir, title):
     """
     Save markdown content to file.
@@ -827,6 +863,12 @@ def save_markdown(content, alias, output_dir, title):
     Returns:
         str: Path to saved file, or None if file already exists
     """
+    # Check if file already exists anywhere in the output directory
+    existing_file = check_paper_exists(output_dir, alias, title)
+    if existing_file:
+        print(f"Paper already exists at: {existing_file}")
+        return None
+    
     # Create year and quarter directories
     current_date = datetime.today()
     year = current_date.year
@@ -838,11 +880,6 @@ def save_markdown(content, alias, output_dir, title):
     
     filename = f"{alias}_{clean_title_for_filename(title)}.md"
     filepath = os.path.join(quarter_dir, filename)
-    
-    # Check if file already exists
-    if os.path.exists(filepath):
-        print("Paper already exists")
-        return None
     
     # Ensure we're not double-escaping ampersands
     content = content.replace("\\&amp;", "\\&")
@@ -1396,6 +1433,8 @@ def extract_ais_metadata_from_html(soup, full_url):
     
     # Set container-title (booktitle for conferences)
     if booktitle:
+        # Clean up booktitle - remove trailing colons
+        booktitle = booktitle.rstrip(':').strip()
         metadata['container-title'] = booktitle
     
     # Determine if this is a journal or conference based on URL
@@ -1597,18 +1636,10 @@ def process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_
     alias = f"{first_author}{pub_year}"
     title = metadata.get("title", "")
 
-    # Create year and quarter directories to check if file exists
-    current_date = datetime.today()
-    current_year = current_date.year
-    quarter = f"Q{(current_date.month-1)//3 + 1}"
-    year_dir = os.path.join(markdown_output_dir, str(current_year))
-    quarter_dir = os.path.join(year_dir, quarter)
-    filename = f"{alias}_{clean_title_for_filename(title)}.md"
-    filepath = os.path.join(quarter_dir, filename)
-
-    # Check if markdown file already exists
-    if os.path.exists(filepath):
-        print("Paper already exists")
+    # Check if markdown file already exists anywhere in the output directory
+    existing_file = check_paper_exists(markdown_output_dir, alias, title)
+    if existing_file:
+        print(f"Paper already exists at: {existing_file}")
         return
 
     # Handle PDF
@@ -1632,8 +1663,9 @@ def process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_
 
     # Create and save markdown
     content, _ = fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related_projects)
-    save_markdown(content, alias, markdown_output_dir, title)
-    print(f"Note created and moved to {filepath}")
+    saved_path = save_markdown(content, alias, markdown_output_dir, title)
+    if saved_path:
+        print(f"Note created and saved to {saved_path}")
 
     # Print BibTeX entry
     print("BibTeX entry:")
