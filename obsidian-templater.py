@@ -822,7 +822,7 @@ def clean_title_for_filename(title):
 
 def check_paper_exists(markdown_output_dir, alias, title):
     """
-    Check if a paper with the given alias already exists in any subdirectory.
+    Check if a paper with the given alias and similar title already exists in any subdirectory.
     Searches recursively through all year/quarter folders.
     
     Args:
@@ -840,13 +840,19 @@ def check_paper_exists(markdown_output_dir, alias, title):
     # Search recursively in all subdirectories
     for root, dirs, files in os.walk(markdown_output_dir):
         for file in files:
-            # Exact match
+            # Exact match on full filename (alias + title)
             if file == filename:
                 return os.path.join(root, file)
-            # Also match files with same alias prefix (same first author and year)
-            # This catches cases where title might have minor differences
+            
+            # Also check for similar titles with same alias (handles minor title differences)
+            # Only match if the file has the same alias AND similar title
             if file.startswith(f"{alias}_") and file.endswith(".md"):
-                return os.path.join(root, file)
+                # Extract the title part from the existing filename
+                existing_title = file[len(alias)+1:-3]  # Remove "alias_" prefix and ".md" suffix
+                # Use fuzzy matching to detect similar titles (threshold 0.85)
+                similarity = SequenceMatcher(None, cleaned_title.lower(), existing_title.lower()).ratio()
+                if similarity > 0.85:
+                    return os.path.join(root, file)
     
     return None
 
