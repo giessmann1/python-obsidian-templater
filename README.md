@@ -56,6 +56,7 @@ See [AIS eLibrary Authentication](#ais-elibrary-authentication) for details on o
 |-----------|-------------|---------|
 | `-doi` | DOI to process | Required (or `-ais`) |
 | `-ais` | AIS eLibrary paper URL or ID to process | Required (or `-doi`) |
+| `--web` | Website URL to store using the misc template | None |
 | `--markdown-dir` | Override markdown output directory | From directories.txt |
 | `--pdf-dir` | Override PDF output directory | From directories.txt |
 | `--force-type` | Force publication type | Auto-detected |
@@ -101,6 +102,11 @@ python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 --related-project
 7. Multiple related projects:
 ```bash
 python obsidian-templater.py -doi 10.1007/978-3-031-68211-7_10 --related-projects "[[Project A]], [[Project B]]"
+```
+
+8. Store a website as a misc note:
+```bash
+python obsidian-templater.py --web "https://example.com/some-article"
 ```
 
 ### Batch Processing

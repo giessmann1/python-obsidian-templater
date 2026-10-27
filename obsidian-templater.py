@@ -11,9 +11,10 @@ import glob
 import argparse
 import html
 import re
+import unicodedata
 from datetime import datetime
 from urllib.parse import urlparse, urljoin
-from habanero import cn
+from habanero import Crossref, cn
 import pandas as pd
 from difflib import SequenceMatcher
 import csv
@@ -126,6 +127,48 @@ type_fields = {
     }
 }
 
+def normalize_crossref_works_metadata(work_message):
+    """
+    Convert CrossRef works API metadata to the citeproc-like shape used elsewhere.
+    """
+    metadata = dict(work_message)
+    if "issued" not in metadata:
+        for key in ("published-print", "published-online", "published", "created"):
+            date_obj = metadata.get(key)
+            if isinstance(date_obj, dict) and date_obj.get("date-parts"):
+                metadata["issued"] = date_obj
+                break
+    return metadata
+
+def classify_publication_type(metadata):
+    """
+    Determine publication type from metadata and normalize the display type.
+    """
+    container_title = metadata.get("container-title", "")
+    if isinstance(container_title, list):
+        container_title = container_title[0] if container_title else ""
+    container_title_lower = container_title.lower() if container_title else ""
+
+    pub_type = "Misc"
+    metadata_type = metadata.get("type", "")
+
+    if metadata_type == "proceedings-article" or \
+       "conference" in container_title_lower or \
+       "proceedings" in container_title_lower:
+        pub_type = "conference"
+        metadata["type"] = "Conference Proceedings"
+    elif metadata_type == "book-chapter":
+        pub_type = "chapter"
+        metadata["type"] = "Book Chapter"
+    elif metadata_type in ("book", "edited-book", "monograph"):
+        pub_type = "book"
+        metadata["type"] = "Book"
+    elif metadata_type == "journal-article":
+        pub_type = "journal"
+        metadata["type"] = "Journal Article"
+
+    return metadata, pub_type
+
 def get_metadata_from_doi(doi):
     """
     Fetch metadata for a given DOI using CrossRef API.
@@ -136,39 +179,26 @@ def get_metadata_from_doi(doi):
     Returns:
         tuple: (metadata dict, publication type) or (None, None) if failed
     """
+    metadata = None
+
     try:
-        metadata_str = cn.content_negotiation(ids=doi, format="citeproc-json")
+        metadata_str = cn.content_negotiation(ids=doi, format="citeproc-json", timeout=30)
         metadata = json.loads(metadata_str)
-        
-        # Safely get container-title as a string (it can be a list or string)
-        container_title = metadata.get("container-title", "")
-        if isinstance(container_title, list):
-            container_title = container_title[0] if container_title else ""
-        container_title_lower = container_title.lower() if container_title else ""
-        
-        # Determine publication type based on metadata
-        pub_type = "Misc"  # default type
-        
-        if metadata.get("type") == "proceedings-article" or \
-           "conference" in container_title_lower or \
-           "proceedings" in container_title_lower:
-            pub_type = "conference"
-            metadata["type"] = "Conference Proceedings"
-        elif metadata.get("type") == "book-chapter":
-            pub_type = "chapter"
-            metadata["type"] = "Book Chapter"
-        elif metadata.get("type") in ("book", "edited-book", "monograph"):
-            pub_type = "book"
-            metadata["type"] = "Book"
-        elif metadata.get("type") == "journal-article":
-            pub_type = "journal"
-            metadata["type"] = "Journal Article"
-        
         print("Successfully retrieved metadata")
-        return metadata, pub_type
-    except Exception:
-        print("Failed to retrieve metadata for this DOI")
-        return None, None
+    except Exception as e:
+        print(f"Content negotiation timed out or failed ({e}); trying CrossRef works API...")
+
+    if metadata is None:
+        try:
+            response = Crossref().works(ids=doi)
+            metadata = normalize_crossref_works_metadata(response["message"])
+            print("Successfully retrieved metadata from CrossRef works API")
+        except Exception as e:
+            print(f"Failed to retrieve metadata for this DOI: {e}")
+            return None, None
+
+    metadata, pub_type = classify_publication_type(metadata)
+    return metadata, pub_type
 
 def download_pdf_with_pypaperbot(doi, save_dir):
     """
@@ -268,7 +298,7 @@ def create_bibtex_string(metadata, alias):
             editors = []
     
     author_entries = " and ".join(
-        f"{clean_lastname_for_alias(a.get('family', ''))}, {a.get('given', '').strip()}" for a in valid_authors
+        f"{a.get('family', '').strip()}, {a.get('given', '').strip()}" for a in valid_authors
     )
     
     # Format editor list with cleaned names (only if we haven't used them as authors)
@@ -280,7 +310,7 @@ def create_bibtex_string(metadata, alias):
             valid_editors.append(editor)
     
     editor_entries = " and ".join(
-        f"{clean_lastname_for_alias(e.get('family', ''))}, {e.get('given', '').strip()}" for e in valid_editors
+        f"{e.get('family', '').strip()}, {e.get('given', '').strip()}" for e in valid_editors
     )
     
     # Extract year and month
@@ -505,6 +535,33 @@ def clean_author_name(author):
             return name
     return None
 
+# Maps German umlauts and letters without a Unicode decomposition to ASCII equivalents
+# (all other accented letters are handled by stripping diacritics in to_ascii)
+ASCII_TRANSLATION = str.maketrans({
+    "ä": "ae", "ö": "oe", "ü": "ue",
+    "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
+    "ß": "ss",
+    "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe",
+    "ø": "o", "Ø": "O", "ł": "l", "Ł": "L",
+    "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+    "þ": "th", "Þ": "Th", "ı": "i",
+})
+
+def to_ascii(text):
+    """
+    Transliterate non-ASCII letters to their closest ASCII equivalents.
+    
+    Args:
+        text (str): Text to transliterate
+        
+    Returns:
+        str: Transliterated text (e.g., "Müller" -> "Mueller", "Núñez" -> "Nunez")
+    """
+    text = text.translate(ASCII_TRANSLATION)
+    # Decompose accented letters (é -> e + ´) and drop the combining marks
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
 def clean_lastname_for_alias(lastname):
     """
     Clean lastname for use in alias and filenames.
@@ -517,8 +574,14 @@ def clean_lastname_for_alias(lastname):
     """
     if not lastname:
         return "Unknown"
-    # Trim whitespace and replace internal spaces with underscores
-    return lastname.strip().replace(' ', '_')
+    # Transliterate non-ASCII letters (umlauts, accents, ø, æ, ...) to ASCII
+    cleaned = to_ascii(lastname.strip())
+    # Replace internal spaces with underscores
+    cleaned = cleaned.replace(' ', '_')
+    # Replace any remaining unsafe characters (/, :, etc.)
+    cleaned = re.sub(r'[^A-Za-z0-9_]', '_', cleaned)
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    return cleaned or "Unknown"
 
 def get_first_valid_author(authors):
     """
@@ -635,7 +698,9 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related
         "author_list": author_list.rstrip(),
         "title": get_metadata_value("title"),
         "year": year or "",
+        "month": month or "",
         "doi": metadata.get("DOI", "") or "",
+        "howpublished": get_metadata_value("URL", default=""),
         "pdf_link": pdf_filename if pdf_filename else "PDF not available",
         "bibtex": create_bibtex_string(metadata, alias),
         "related_projects": related_projects or ""
@@ -1694,6 +1759,212 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     process_metadata(metadata, pub_type, template_dir, markdown_output_dir, pdf_output_dir,
                      force_type, skip_pdf, local_pdf, doi, related_projects)
 
+def _parse_person_name_to_author(author_text):
+    """
+    Best-effort conversion of a human name string to the author dict format.
+    """
+    if not author_text:
+        return None
+    cleaned = " ".join(author_text.split()).strip()
+    if not cleaned:
+        return None
+    # Reject non-person author strings that are commonly URLs/handles
+    lowered = cleaned.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://") or "www." in lowered:
+        return None
+    parts = cleaned.split(" ")
+    if len(parts) == 1:
+        return {"given": "", "family": parts[0]}
+    return {"given": " ".join(parts[:-1]), "family": parts[-1]}
+
+def fetch_web_metadata(url):
+    """
+    Fetch a webpage and extract minimal metadata for misc notes.
+    Returns (metadata_dict, pub_type) where pub_type is always 'misc' on success.
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
+        }
+        resp = requests.get(url, timeout=20, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, "html.parser")
+
+        # Title preference order: og:title -> <title> -> h1
+        title = ""
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            title = og_title["content"].strip()
+        if not title and soup.title and soup.title.string:
+            title = soup.title.string.strip()
+        if not title:
+            h1 = soup.find("h1")
+            if h1:
+                title = h1.get_text(strip=True)
+        if not title:
+            title = url
+
+        # Author: common meta tags
+        author = ""
+        for meta in (
+            soup.find("meta", attrs={"name": "author"}),
+            soup.find("meta", property="article:author"),
+            soup.find("meta", property="og:article:author"),
+        ):
+            if meta and meta.get("content"):
+                author = meta["content"].strip()
+                break
+        # Some sites put social/profile URLs in "author" meta; treat those as unusable.
+        if author and _parse_person_name_to_author(author) is None:
+            author = ""
+
+        def _extract_author_from_jsonld():
+            scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
+            for s in scripts:
+                raw = s.string
+                if not raw or not raw.strip():
+                    continue
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                def iter_nodes(node):
+                    if node is None:
+                        return
+                    if isinstance(node, list):
+                        for it in node:
+                            yield from iter_nodes(it)
+                    elif isinstance(node, dict):
+                        yield node
+                        # schema.org sometimes nests in @graph
+                        if "@graph" in node:
+                            yield from iter_nodes(node.get("@graph"))
+
+                for node in iter_nodes(data):
+                    if not isinstance(node, dict):
+                        continue
+                    t = node.get("@type") or node.get("type")
+                    # @type can be list or str
+                    types = t if isinstance(t, list) else [t]
+                    types = [x for x in types if isinstance(x, str)]
+                    if not any(x in {"Article", "NewsArticle", "ReportageNewsArticle", "BlogPosting"} for x in types):
+                        continue
+
+                    a = node.get("author")
+                    if not a:
+                        continue
+                    # author can be string, dict, or list
+                    candidates = []
+                    if isinstance(a, str):
+                        candidates = [a]
+                    elif isinstance(a, dict):
+                        name = a.get("name") or a.get("headline")
+                        if isinstance(name, str):
+                            candidates = [name]
+                    elif isinstance(a, list):
+                        for it in a:
+                            if isinstance(it, str):
+                                candidates.append(it)
+                            elif isinstance(it, dict):
+                                name = it.get("name")
+                                if isinstance(name, str):
+                                    candidates.append(name)
+                    for c in candidates:
+                        c = " ".join(str(c).split()).strip()
+                        if c:
+                            return c
+            return ""
+
+        # JSON-LD is often the most reliable author source
+        if not author:
+            author = _extract_author_from_jsonld()
+
+        # Fallback: look for a byline like "Von <Name>"
+        if not author:
+            page_text = soup.get_text(" ", strip=True)
+            # Prefer patterns that include a date after the byline (common on German news sites).
+            m = re.search(r"\bVon\s+(.{2,80}?)\s+\d{2}\.\d{2}\.\d{4}(?:,|\b)", page_text)
+            if m:
+                candidate = " ".join(m.group(1).split()).strip().strip(",|-")
+                author = candidate
+            else:
+                # More general fallback if no date is present nearby.
+                m = re.search(r"\bVon\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-. ]{2,60})\b", page_text)
+                if m:
+                    author = " ".join(m.group(1).split()).strip()
+
+        # Published date: article:published_time, date, or time[datetime]
+        published = ""
+        for meta in (
+            soup.find("meta", property="article:published_time"),
+            soup.find("meta", attrs={"name": "date"}),
+            soup.find("meta", attrs={"name": "pubdate"}),
+        ):
+            if meta and meta.get("content"):
+                published = meta["content"].strip()
+                break
+        if not published:
+            time_el = soup.find("time")
+            if time_el and time_el.get("datetime"):
+                published = str(time_el.get("datetime")).strip()
+
+        # Convert published to issued date-parts [[YYYY, M, D]] if possible
+        issued = None
+        if published:
+            # Keep it permissive: match YYYY-MM-DD anywhere
+            m = re.search(r"(\d{4})-(\d{2})-(\d{2})", published)
+            if m:
+                issued = {"date-parts": [[int(m.group(1)), int(m.group(2)), int(m.group(3))]]}
+
+        if not issued:
+            today = datetime.today()
+            issued = {"date-parts": [[today.year, today.month, today.day]]}
+
+        metadata = {
+            "type": "Misc",
+            "title": title,
+            "issued": issued,
+            "URL": url,
+            "author": [],
+        }
+
+        author_obj = _parse_person_name_to_author(author)
+        if author_obj:
+            metadata["author"] = [author_obj]
+
+        return metadata, "misc"
+    except Exception as e:
+        print(f"Error fetching web metadata from {url}: {str(e)}")
+        return None, None
+
+def process_web(url, template_dir, markdown_output_dir, pdf_output_dir, related_projects=None):
+    """
+    Process a website URL as a misc note.
+    """
+    # Normalize common user inputs like "www.example.com/..." to a valid URL.
+    url = (url or "").strip()
+    if url and not re.match(r"^https?://", url, flags=re.IGNORECASE):
+        url = "https://" + url
+
+    print(f"Processing website: {url}")
+    metadata, pub_type = fetch_web_metadata(url)
+    if not metadata:
+        print("Exiting: Cannot proceed without web metadata")
+        exit(1)
+    process_metadata(
+        metadata,
+        pub_type,
+        template_dir,
+        markdown_output_dir,
+        pdf_output_dir,
+        force_type="misc",
+        skip_pdf=True,
+        local_pdf=None,
+        doi=None,
+        related_projects=related_projects,
+    )
+
 def read_directories():
     """
     Read directory paths from directories.txt.
@@ -1742,6 +2013,7 @@ def main():
     parser = argparse.ArgumentParser(description='Process a DOI and create Obsidian notes with optional PDF download.')
     parser.add_argument('-doi', help='The DOI to process')
     parser.add_argument('-ais', help='AIS eLibrary paper ID or URL to process')
+    parser.add_argument('-web', help='Website URL to store using misc template')
     parser.add_argument('--markdown-dir', default=directories['markdown_dir'],
                       help=f'Directory for markdown output (default: {directories["markdown_dir"]})')
     parser.add_argument('--pdf-dir', default=directories['pdf_dir'],
@@ -1754,8 +2026,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Process website if --web flag is provided
+    if args.web:
+        process_web(
+            args.web,
+            TEMPLATE_DIR,
+            args.markdown_dir,
+            args.pdf_dir,
+            args.related_projects,
+        )
     # Process AIS eLibrary paper if -ais flag is provided
-    if args.ais:
+    elif args.ais:
         process_ais_paper(
             args.ais,
             TEMPLATE_DIR,  # Use hard-coded template directory
@@ -1778,7 +2059,7 @@ def main():
         args.related_projects
     )
     else:
-        parser.error('Either -doi or -ais must be provided')
+        parser.error('Either -doi, -ais, or --web must be provided')
 
 if __name__ == "__main__":
     main()

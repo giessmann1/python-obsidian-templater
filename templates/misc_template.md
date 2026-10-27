@@ -5,7 +5,7 @@ imported: {{imported_date}}
 status: "{{status}}"
 author: {{author_list}}
 title: "{{title}}"
-howpublished: ""
+howpublished: "{{howpublished}}"
 year: {{year}}
 month: {{month}}
 note: "Retrieved {{imported_date}}"
