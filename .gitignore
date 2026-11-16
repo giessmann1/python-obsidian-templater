@@ -7,3 +7,5 @@ directories.txt
 .secrets.txt
 .papers.txt
 __pycache__/
+macos-app/build/
+.deepeval/

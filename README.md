@@ -165,6 +165,18 @@ With related projects:
 python obsidian-templater.py -ais "icis2023/blockchain/blockchain/7" --related-projects "[[Blockchain Research]]"
 ```
 
+## Menu Bar App (macOS)
+
+A small native menu bar app is included as a front end for the script. Click the icon, paste DOIs or AIS links (one per line), tick the options and press **Fetch**.
+
+Build it (needs the Swift toolchain from the Xcode Command Line Tools, macOS 13+):
+```bash
+macos-app/build.sh
+open "macos-app/build/Obsidian Templater.app"
+```
+
+The app runs `obsidian-templater.py` from this folder with the Python in `.env/`, so the setup above must be complete. If you move the folder, rebuild or pick the new location under the gear menu → "Templater folder…".
+
 ## AIS eLibrary Authentication
 
 To download PDFs from AIS eLibrary, you need to provide an authentication cookie. This requires membership access to AIS eLibrary.

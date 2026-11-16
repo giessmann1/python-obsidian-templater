@@ -1,0 +1,31 @@
+{
+  "": {
+    "dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ObsidianTemplaterBar.d",
+    "object": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ObsidianTemplaterBar.o",
+    "swift-dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/master.swiftdeps"
+  },
+  "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/App.swift": {
+    "object": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.swift.o",
+    "swiftmodule": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App~partial.swiftmodule",
+    "swift-dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.swiftdeps",
+    "diagnostics": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.dia"
+  },
+  "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/ContentView.swift": {
+    "object": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.swift.o",
+    "swiftmodule": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView~partial.swiftmodule",
+    "swift-dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.swiftdeps",
+    "diagnostics": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.dia"
+  },
+  "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/Fetcher.swift": {
+    "object": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.swift.o",
+    "swiftmodule": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher~partial.swiftmodule",
+    "swift-dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.swiftdeps",
+    "diagnostics": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.dia"
+  },
+  "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/InputParser.swift": {
+    "object": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.swift.o",
+    "swiftmodule": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser~partial.swiftmodule",
+    "swift-dependencies": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.swiftdeps",
+    "diagnostics": "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.dia"
+  }
+}

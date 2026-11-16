@@ -1,0 +1,276 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.ObsidianTemplaterBar-arm64-apple-macosx26.0-release.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/sources",
+      "importPath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/App.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/ContentView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/Fetcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/InputParser.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "ObsidianTemplaterBar",
+      "moduleOutputPath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/Modules/ObsidianTemplaterBar.swiftmodule",
+      "objects" : [
+        "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.swift.o",
+        "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.swift.o",
+        "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.swift.o",
+        "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-whole-module-optimization",
+        "-num-threads",
+        "10",
+        "-serialize-diagnostics",
+        "-O",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "ObsidianTemplaterBar_main",
+        "-swift-version",
+        "5",
+        "-I",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-L",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-plugin-path",
+        "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "macos_app"
+      ],
+      "outputFileMapPath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/Modules/ObsidianTemplaterBar.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/App.swift",
+        "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/ContentView.swift",
+        "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/Fetcher.swift",
+        "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/InputParser.swift"
+      ],
+      "tempsPath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build",
+      "wholeModuleOptimization" : true
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "ObsidianTemplaterBar" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "ObsidianTemplaterBar",
+      "-package-name",
+      "macos_app",
+      "-c",
+      "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/App.swift",
+      "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/ContentView.swift",
+      "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/Fetcher.swift",
+      "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/InputParser.swift",
+      "-I",
+      "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-whole-module-optimization",
+      "-num-threads",
+      "10",
+      "-serialize-diagnostics",
+      "-O",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "ObsidianTemplaterBar_main",
+      "-swift-version",
+      "5",
+      "-I",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-L",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-plugin-path",
+      "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "macos_app",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "ObsidianTemplaterBar" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/App.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/ContentView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/Fetcher.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/Sources/ObsidianTemplaterBar/InputParser.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/sources"
+    },
+    "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/App.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/ContentView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/Fetcher.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.build/InputParser.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/ObsidianTemplaterBar.product/Objects.LinkFileList"
+    },
+    "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/imis/python-obsidian-templater/macos-app/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt"
+    }
+  }
+}
