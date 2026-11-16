@@ -6,3 +6,4 @@ papers/
 directories.txt
 .secrets.txt
 .papers.txt
+__pycache__/

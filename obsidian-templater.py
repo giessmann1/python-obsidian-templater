@@ -14,7 +14,7 @@ import re
 import unicodedata
 from datetime import datetime
 from urllib.parse import urlparse, urljoin
-from habanero import Crossref, cn
+from habanero import Crossref
 import pandas as pd
 from difflib import SequenceMatcher
 import csv
@@ -169,6 +169,15 @@ def classify_publication_type(metadata):
 
     return metadata, pub_type
 
+def normalize_doi(doi):
+    """
+    Strip resolver URL or "doi:" prefixes so only the bare DOI remains.
+    """
+    doi = doi.strip()
+    doi = re.sub(r'^(https?://)?(dx\.)?doi\.org/', '', doi, flags=re.IGNORECASE)
+    doi = re.sub(r'^doi:\s*', '', doi, flags=re.IGNORECASE)
+    return doi
+
 def get_metadata_from_doi(doi):
     """
     Fetch metadata for a given DOI using CrossRef API.
@@ -182,8 +191,15 @@ def get_metadata_from_doi(doi):
     metadata = None
 
     try:
-        metadata_str = cn.content_negotiation(ids=doi, format="citeproc-json", timeout=30)
-        metadata = json.loads(metadata_str)
+        # Query doi.org directly so non-CrossRef DOIs (e.g. DataCite/arXiv) also resolve;
+        # habanero's citeproc-json always goes to api.crossref.org
+        response = requests.get(
+            f"https://doi.org/{doi}",
+            headers={"Accept": "application/vnd.citationstyles.csl+json"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        metadata = response.json()
         print("Successfully retrieved metadata")
     except Exception as e:
         print(f"Content negotiation timed out or failed ({e}); trying CrossRef works API...")
@@ -690,6 +706,14 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related
     editor_list = "".join(f"  - \"{escape_yaml_quotes(clean_author_name(e))}\"\n" for e in valid_editors)
     editor_list = f"\n{editor_list}" if editor_list else ""
 
+    # Quote wikilinks so YAML reads them as strings ("[[A]]") instead of nested lists ([["A"]])
+    related_projects = related_projects or ""
+    project_links = re.findall(r'\[\[.+?\]\]', related_projects)
+    if len(project_links) == 1:
+        related_projects = f'"{project_links[0]}"'
+    elif project_links:
+        related_projects = "".join(f'\n  - "{link}"' for link in project_links)
+
     # Common placeholders for all types
     placeholders = {
         "alias": alias,
@@ -703,7 +727,7 @@ def fill_template(template_path, metadata, pdf_filename, pdf_output_dir, related
         "howpublished": get_metadata_value("URL", default=""),
         "pdf_link": pdf_filename if pdf_filename else "PDF not available",
         "bibtex": create_bibtex_string(metadata, alias),
-        "related_projects": related_projects or ""
+        "related_projects": related_projects
     }
 
     # Add journal metrics if this is a journal article
@@ -1749,6 +1773,8 @@ def process_doi(doi, template_dir, markdown_output_dir, pdf_output_dir, force_ty
     """
     Process a DOI: fetch metadata, download PDF, create note.
     """
+    doi = normalize_doi(doi)
+
     # Fetch metadata
     metadata, pub_type = get_metadata_from_doi(doi)
     if not metadata:
@@ -2024,7 +2050,18 @@ def main():
     parser.add_argument('--local-pdf', help='Path to a local PDF file to use instead of downloading')
     parser.add_argument('--related-projects', help='Related projects to add to the note (e.g., "[[Project A]], [[Project B]]")')
 
+    parser.add_argument('-readinglist', action='store_true',
+                      help='Add "[[Reading_List]]" to the related projects of the note')
+
     args = parser.parse_args()
+
+    # Append the reading list project to any explicitly given related projects
+    if args.readinglist:
+        reading_list = "[[Reading_List]]"
+        if not args.related_projects:
+            args.related_projects = reading_list
+        elif reading_list not in args.related_projects:
+            args.related_projects = f"{args.related_projects}, {reading_list}"
 
     # Process website if --web flag is provided
     if args.web:

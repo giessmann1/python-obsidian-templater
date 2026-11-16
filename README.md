@@ -63,6 +63,7 @@ See [AIS eLibrary Authentication](#ais-elibrary-authentication) for details on o
 | `--skip-pdf` | Skip PDF download | False |
 | `--local-pdf` | Use local PDF file instead of downloading | None |
 | `--related-projects` | Related projects to add to the note (e.g., `"[[Project A]]"`) | None |
+| `-readinglist` | Add `[[Reading_List]]` to the related projects of the note | False |
 
 ### Examples
 
